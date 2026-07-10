@@ -30,6 +30,8 @@ interface ContinuousReaderProps {
   satCut: number
   imageDim: number
   crop: CropBox | null
+  /** Page width multiplier. 1 = whole page fits the viewport (fit-page). */
+  zoom: number
   /** Current page (controlled): a jump scrolls here; scrolling reports back. */
   page: number
   onPage: (page: number) => void
@@ -52,6 +54,7 @@ export function ContinuousReader({
   satCut,
   imageDim,
   crop,
+  zoom,
   page,
   onPage,
   onToggleChrome,
@@ -68,20 +71,28 @@ export function ContinuousReader({
   const rendered = useRef(new Map<number, HTMLCanvasElement>())
   const clsCache = useRef(new Map<number, PageClassification>())
   const renderChain = useRef<Promise<void>>(Promise.resolve())
+  // Suppress scroll reports while WE are scrolling programmatically (a jump or a
+  // zoom re-anchor), so an auto-scroll doesn't get mistaken for the user's.
   const programmaticScroll = useRef(false)
+  // The last page WE reported up. A `page` prop equal to this is our own echo,
+  // not a jump — so it must not trigger a scroll (that was the teleport bug).
+  const lastReported = useRef<number | null>(null)
+  const prevSlotHeight = useRef(0)
+  const releaseRef = useRef<number | undefined>(undefined)
 
-  const [contentWidth, setContentWidth] = useState(0)
+  const [dims, setDims] = useState({ w: 0, h: 0 })
   const [aspect, setAspect] = useState(0) // page height / width, uniform estimate
   const [visible, setVisible] = useState<{ from: number; to: number }>({ from: 1, to: 1 })
   const [, force] = useState(0)
   const redraw = useCallback(() => force((n) => n + 1), [])
 
-  // Measure the container and the book's page aspect (page 1 — books are
-  // near-always uniform, which makes slot heights exact and jumps land true).
+  // Measure the container (both dimensions) and the book's page aspect (page 1 —
+  // books are near-always uniform, which makes slot heights exact and jumps
+  // land true).
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
-    const measure = () => setContentWidth(Math.max(0, scroller.clientWidth - 16))
+    const measure = () => setDims({ w: scroller.clientWidth, h: scroller.clientHeight })
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(scroller)
@@ -101,11 +112,28 @@ export function ContinuousReader({
     }
   }, [doc, crop])
 
+  // Content width: at zoom 1 the WHOLE page fits the viewport (fit-page) — on a
+  // phone that's width-bound (unchanged), on a wide desktop window it's
+  // height-bound, which is the fix for "too zoomed in, can't zoom out". Zoom
+  // scales up from there, capped at the container width so a vertical scroll
+  // never also needs a horizontal one.
+  const availW = Math.max(0, dims.w - 16)
+  const availH = Math.max(0, dims.h - PAGE_GAP)
+  const fitPage = aspect ? Math.min(availW, availH / aspect) : availW
+  const contentWidth = Math.min(availW, fitPage * zoom)
+
   const slotHeight = contentWidth && aspect ? contentWidth * aspect + PAGE_GAP : 0
   const slotFor = useCallback(
     (n: number): Slot => ({ top: (n - 1) * slotHeight, height: slotHeight }),
     [slotHeight],
   )
+
+  // Content size changed (zoom/resize): existing canvases are the wrong
+  // resolution, so drop them and let the render effect repaint the visible ones.
+  useEffect(() => {
+    rendered.current.clear()
+    redraw()
+  }, [contentWidth, redraw])
 
   // A new render context whenever the look changes; the old canvases are stale.
   useEffect(() => {
@@ -130,48 +158,86 @@ export function ContinuousReader({
     }
   }, [])
 
-  // Recompute which pages are near the viewport, and report the current page.
-  const recompute = useCallback(() => {
+  // The render window for a given scroll position.
+  const windowFor = useCallback(
+    (top: number) => {
+      const ch = scrollerRef.current?.clientHeight ?? 0
+      return {
+        from: Math.max(1, Math.floor(top / slotHeight) + 1 - RENDER_BUFFER),
+        to: Math.min(pageCount, Math.floor((top + ch) / slotHeight) + 1 + RENDER_BUFFER),
+      }
+    },
+    [slotHeight, pageCount],
+  )
+
+  // On a real user scroll: update the window, and report the page it lands on.
+  // Reporting is skipped while WE are scrolling (jump/re-anchor), and only fires
+  // on a genuine change — so the resulting `page` prop update reads as our own
+  // echo, never a jump back (that echo-as-jump was the mid-page teleport).
+  const onUserScroll = useCallback(() => {
     const scroller = scrollerRef.current
     if (!scroller || !slotHeight) return
     const top = scroller.scrollTop
+    setVisible((v) => {
+      const w = windowFor(top)
+      return v.from === w.from && v.to === w.to ? v : w
+    })
+    if (programmaticScroll.current) return
     const mid = top + scroller.clientHeight / 2
     const current = Math.min(pageCount, Math.max(1, Math.floor(mid / slotHeight) + 1))
-    if (!programmaticScroll.current) onPage(current)
-    const first = Math.max(1, Math.floor(top / slotHeight) + 1 - RENDER_BUFFER)
-    const last = Math.min(
-      pageCount,
-      Math.floor((top + scroller.clientHeight) / slotHeight) + 1 + RENDER_BUFFER,
-    )
-    setVisible((v) => (v.from === first && v.to === last ? v : { from: first, to: last }))
-  }, [slotHeight, pageCount, onPage])
+    if (current !== lastReported.current) {
+      lastReported.current = current
+      onPage(current)
+    }
+  }, [slotHeight, pageCount, onPage, windowFor])
 
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
-    const onScroll = () => recompute()
-    scroller.addEventListener('scroll', onScroll, { passive: true })
-    recompute()
-    return () => scroller.removeEventListener('scroll', onScroll)
-  }, [recompute])
+    scroller.addEventListener('scroll', onUserScroll, { passive: true })
+    return () => scroller.removeEventListener('scroll', onUserScroll)
+  }, [onUserScroll])
 
-  // Jump: when the controlled page changes and it's off-screen, scroll to it.
+  // The one place that scrolls the strip programmatically. Suppresses reporting
+  // until the scroll settles, and sets the render window for the destination.
+  const scrollToPage = useCallback(
+    (p: number) => {
+      const scroller = scrollerRef.current
+      if (!scroller || !slotHeight) return
+      const top = (p - 1) * slotHeight
+      programmaticScroll.current = true
+      scroller.scrollTo({ top })
+      setVisible(windowFor(top))
+      window.clearTimeout(releaseRef.current)
+      releaseRef.current = window.setTimeout(() => {
+        programmaticScroll.current = false
+      }, 200)
+    },
+    [slotHeight, windowFor],
+  )
+
+  // The single owner of programmatic scrolling. Three cases, in priority:
+  //   - first layout: land on the resume page.
+  //   - slot heights changed (zoom/resize/rotate): re-anchor to the page we are
+  //     ACTUALLY on (lastReported), computed before the change — never from the
+  //     now-stale scroll position, which would resolve to the wrong page.
+  //   - a genuine jump: the `page` prop differs from what we last reported
+  //     (scrubber/TOC/search/bookmark). An equal `page` is our own echo: ignore.
   useEffect(() => {
-    const scroller = scrollerRef.current
-    if (!scroller || !slotHeight) return
-    const target = (page - 1) * slotHeight
-    // Only scroll if we're not already showing that page (avoids fighting the
-    // user's own scroll, which reports the page back up).
-    if (Math.abs(scroller.scrollTop - target) < scroller.clientHeight * 0.4) return
-    programmaticScroll.current = true
-    scroller.scrollTo({ top: target })
-    // Release after the scroll settles so recompute stops suppressing reports.
-    const t = setTimeout(() => {
-      programmaticScroll.current = false
-      recompute()
-    }, 120)
-    return () => clearTimeout(t)
-  }, [page, slotHeight, recompute])
+    if (!slotHeight) return
+    const firstLayout = prevSlotHeight.current === 0
+    const slotChanged = prevSlotHeight.current !== slotHeight
+    prevSlotHeight.current = slotHeight
+    if (firstLayout) {
+      lastReported.current = page
+      scrollToPage(page)
+    } else if (slotChanged) {
+      scrollToPage(lastReported.current ?? page)
+    } else if (page !== lastReported.current) {
+      lastReported.current = page
+      scrollToPage(page)
+    }
+  }, [page, slotHeight, scrollToPage])
 
   // Render (and evict) canvases to match the visible window. Renders are
   // serialized on one chain because they share the GL + source canvases.

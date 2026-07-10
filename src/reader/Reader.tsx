@@ -848,6 +848,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           satCut={SAT_CUT}
           imageDim={imageDim}
           crop={cropMargins ? cropBox : null}
+          zoom={zoom}
           page={page}
           onPage={setPage}
           onToggleChrome={() => setChrome((c) => !c)}
@@ -1101,33 +1102,32 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             <p className="mb-8 text-xs leading-relaxed text-ink-faint">
               {viewMode === 'paged'
                 ? 'Tap the sides to turn pages. Pinch to zoom; select text to copy or highlight.'
-                : 'Flow through the whole book by scrolling. Zoom, text select and highlight-making live in Paged mode.'}
+                : 'Flow through the whole book by scrolling. Text select and highlight-making live in Paged mode.'}
             </p>
 
-            {viewMode === 'paged' && (
-              <>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Zoom
-                  </span>
-                  <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
-                </div>
-                <div className="mb-7 flex items-center gap-3.5">
-                  <span className="font-serif text-[13px] text-ink-soft">A</span>
-                  <input
-                    aria-label="Zoom"
-                    type="range"
-                    min={1}
-                    max={4}
-                    step={0.1}
-                    value={zoom}
-                    onChange={(e) => setZoom(Number(e.target.value))}
-                    className="cozy-range flex-1"
-                    style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
-                  />
-                  <span className="font-serif text-2xl text-ink-soft">A</span>
-                </div>
-              </>
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Zoom</span>
+              <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+            </div>
+            <div className="mb-7 flex items-center gap-3.5">
+              <span className="font-serif text-[13px] text-ink-soft">A</span>
+              <input
+                aria-label="Zoom"
+                type="range"
+                min={1}
+                max={4}
+                step={0.1}
+                value={zoom}
+                onChange={(e) => setZoom(Number(e.target.value))}
+                className="cozy-range flex-1"
+                style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+              />
+              <span className="font-serif text-2xl text-ink-soft">A</span>
+            </div>
+            {viewMode === 'scroll' && (
+              <p className="-mt-5 mb-7 text-xs leading-relaxed text-ink-faint">
+                At 1× the whole page fits the screen; slide up to fill the width.
+              </p>
             )}
 
             <div className="mb-2.5 flex items-center justify-between">
