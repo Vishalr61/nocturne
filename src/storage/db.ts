@@ -119,6 +119,20 @@ export async function addBookmark(bookId: string, page: number, note?: string): 
   await db.bookmarks.put({ id: bookmarkId(bookId, page), bookId, page, note, createdAt: Date.now() })
 }
 
+/** Label a bookmark. An empty note clears it, and the row falls back to "Page N". */
+export async function setBookmarkNote(bookId: string, page: number, note: string): Promise<void> {
+  const t = note.trim()
+  await db.bookmarks.update(bookmarkId(bookId, page), { note: t || undefined })
+}
+
+/** How many bookmarks each book has, for the shelf. */
+export async function bookmarkCounts(): Promise<Record<string, number>> {
+  const rows = await db.bookmarks.toArray()
+  const out: Record<string, number> = {}
+  for (const r of rows) out[r.bookId] = (out[r.bookId] ?? 0) + 1
+  return out
+}
+
 export async function removeBookmark(bookId: string, page: number): Promise<void> {
   await db.bookmarks.delete(bookmarkId(bookId, page))
 }

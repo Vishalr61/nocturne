@@ -16,9 +16,11 @@ export default {
         panel: '#1c150d', // settings drawer
         inset: '#120d07', // sunken control wells
         line: '#2b2013', // hairline borders
+        // Defined once in index.css as :root custom properties; referenced here
+        // and in inline styles, so there is exactly one source of truth.
         accent: {
-          DEFAULT: '#c9a56a', // muted sepia gold — the only accent
-          hi: '#e0c088',
+          DEFAULT: 'rgb(var(--accent-rgb) / <alpha-value>)', // muted sepia gold — the only accent
+          hi: 'rgb(var(--accent-hi-rgb) / <alpha-value>)',
           on: '#1a1408', // text on accent fills
         },
         ink: {

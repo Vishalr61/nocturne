@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The single source of truth for the accent. Tailwind's `accent-*` colours and
+   every inline style read these, so a theme tweak lands everywhere at once.
+   Space-separated channels so Tailwind's /opacity modifiers work. */
+:root {
+  --accent-rgb: 201 165 106; /* #c9a56a — muted sepia gold */
+  --accent-hi-rgb: 224 192 136; /* #e0c088 */
+}
+
 html,
 body,
 #root {
@@ -46,14 +54,18 @@ body {
 .cozy-range::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 3px;
-  background: linear-gradient(90deg, #c9a56a var(--fill, 0%), #2b201380 var(--fill, 0%));
+  background: linear-gradient(
+    90deg,
+    rgb(var(--accent-rgb)) var(--fill, 0%),
+    #2b201380 var(--fill, 0%)
+  );
 }
 .cozy-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #c9a56a;
+  background: rgb(var(--accent-rgb));
   border: none;
   margin-top: -5.5px;
 }
@@ -65,13 +77,13 @@ body {
 .cozy-range::-moz-range-progress {
   height: 3px;
   border-radius: 3px;
-  background: #c9a56a;
+  background: rgb(var(--accent-rgb));
 }
 .cozy-range::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #c9a56a;
+  background: rgb(var(--accent-rgb));
   border: none;
 }
 

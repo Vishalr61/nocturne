@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   allProgress,
+  bookmarkCounts,
   deleteBook,
   exportLibrary,
   importLibrary,
@@ -39,6 +40,7 @@ const coverGradient = (id: string) =>
 export function Shelf({ onOpen }: ShelfProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
   const [progress, setProgress] = useState<ProgressByBook>({})
+  const [marks, setMarks] = useState<Record<string, number>>({})
   const [storage, setStorage] = useState<string>('')
   const [durable, setDurable] = useState<boolean | null>(null)
   const [note, setNote] = useState('')
@@ -50,14 +52,16 @@ export function Shelf({ onOpen }: ShelfProps) {
   const editRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
-    const [bs, ps, est, persisted] = await Promise.all([
+    const [bs, ps, est, persisted, marks] = await Promise.all([
       listBooks(),
       allProgress(),
       storageEstimate(),
       isPersisted(),
+      bookmarkCounts(),
     ])
     setBooks(bs)
     setProgress(ps)
+    setMarks(marks)
     setDurable(persisted)
     if (est && est.quota > 0) {
       setStorage(`${fmtBytes(est.used)} of ${fmtBytes(est.quota)} used`)
@@ -158,7 +162,10 @@ export function Shelf({ onOpen }: ShelfProps) {
         <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
           <div
             className="h-[30px] w-[30px] flex-none rounded-[9px]"
-            style={{ background: 'radial-gradient(120% 120% at 30% 20%,#e0c088,#a97f3f)' }}
+            style={{
+              background:
+                'radial-gradient(120% 120% at 30% 20%,rgb(var(--accent-hi-rgb)),rgb(var(--accent-rgb) / 0.55))',
+            }}
           />
           <h1 className="font-serif text-xl font-semibold tracking-tight text-ink-bright">
             Nocturne
@@ -239,11 +246,8 @@ export function Shelf({ onOpen }: ShelfProps) {
                     <div className="mt-6 flex max-w-[440px] items-center gap-4">
                       <div className="h-1 flex-1 overflow-hidden rounded bg-line">
                         <div
-                          className="h-full"
-                          style={{
-                            width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%`,
-                            background: 'linear-gradient(90deg,#c9a56a,#e6c68c)',
-                          }}
+                          className="h-full bg-gradient-to-r from-accent to-accent-hi"
+                          style={{ width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%` }}
                         />
                       </div>
                       <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-mid">
@@ -305,6 +309,11 @@ export function Shelf({ onOpen }: ShelfProps) {
                               {b.title}
                             </div>
                           </div>
+                        )}
+                        {marks[b.id] > 0 && (
+                          <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[11px] tabular-nums text-accent">
+                            ★ {marks[b.id]}
+                          </span>
                         )}
                         {/* progress strip along the cover's bottom edge */}
                         <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/30">
@@ -369,10 +378,7 @@ export function Shelf({ onOpen }: ShelfProps) {
           the two escape hatches (backup file, restore) that make them so. */}
       <footer className="mx-auto flex w-full max-w-[1180px] flex-wrap items-center justify-center gap-x-4 gap-y-1 px-5 pb-5 text-xs text-ink-faint sm:justify-between sm:px-8">
         <span className="flex items-center gap-1.5">
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ background: durable ? '#c9a56a' : '#6f6041' }}
-          />
+          <span className={`h-1.5 w-1.5 rounded-full ${durable ? 'bg-accent' : 'bg-ink-faint'}`} />
           {durable === null
             ? ''
             : durable

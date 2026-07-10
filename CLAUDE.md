@@ -11,8 +11,11 @@ white-background PDFs pleasant to read — without blurring the text or wrecking
 images, the two things existing "PDF dark mode" tools get wrong.
 
 Plain **Vite + React + TypeScript + Tailwind**, **Canvas/WebGL2** for rendering,
-**pdf.js** for parsing, **Dexie/IndexedDB** for local storage. No backend, no
-accounts. Ships static (Vercel).
+**pdf.js** for parsing, **Dexie/IndexedDB** for local storage. Ships static
+(Vercel). The app is **local-first**: it must work fully offline with no server,
+and PDF bytes never leave the device. An **opt-in, state-only** sync (roadmap 6)
+may add a tiny backend for positions/themes/bookmarks — never for book content,
+never a content account. See the guardrail below.
 
 ## Commands
 
@@ -166,7 +169,16 @@ reading screenshots. The setup that works on this machine:
   cap: `clampRenderDpr` (engine/pdf.ts) keeps any canvas ≤ ~16.7M px / 8192 px
   per side — iOS's hard limits — so extreme zoom renders slightly soft instead
   of blank pages or a memory-killed tab. Still a fresh vector render each time.
-- **Local-only & private.** PDFs never leave the device. Keep the `storage/db.ts`
-  seam clean so cloud sync can be added later without touching the rest of the app.
+- **Local-first & private.** This is the rule, stated precisely so it doesn't
+  get read as "never write a backend" and doesn't get read as "a server is fine":
+  - **PDF bytes never leave the device.** No uploading book content, ever, and
+    no server-side rendering, OCR, or thumbnailing of a user's book.
+  - **The app must work fully offline with zero server.** Sync is additive and
+    opt-in; if the backend is down or never configured, nothing degrades.
+  - **No content accounts, no PII.** Identity for sync is a locally generated
+    device secret the user copies between devices — not an email/password login.
+  - Roadmap 6 (state-only sync: positions, themes, titles, bookmarks) is
+    explicitly *allowed* by this rule. Uploading a book is *not*. Keep the
+    `storage/db.ts` seam clean so sync stays swappable.
 - **DRM-free only.** Never add anything that circumvents PDF protection.
 - Work in small reviewable increments; run typecheck + build before declaring done.

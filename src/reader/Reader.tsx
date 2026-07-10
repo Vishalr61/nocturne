@@ -32,6 +32,7 @@ import {
   getProgress,
   listBookmarks,
   removeBookmark,
+  setBookmarkNote,
   saveProfile,
   saveProgress,
   saveThumb,
@@ -102,6 +103,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [highlightQuery, setHighlightQuery] = useState('')
   const [highlights, setHighlights] = useState<HighlightRect[]>([])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  /** Page whose bookmark note is being edited in the Contents list, and the draft. */
+  const [noteFor, setNoteFor] = useState<number | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
@@ -627,6 +631,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setBookmarks(await listBookmarks(id))
   }, [])
 
+  const commitNote = useCallback(async () => {
+    const id = loadedIdRef.current
+    if (!id || noteFor === null) return
+    const p = noteFor
+    setNoteFor(null)
+    await setBookmarkNote(id, p, noteDraft)
+    setBookmarks(await listBookmarks(id))
+  }, [noteFor, noteDraft])
+
   const openHit = useCallback((hit: SearchHit, q: string) => {
     setHighlightQuery(q)
     setPage(hit.page)
@@ -685,12 +698,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           </span>
           <button
             aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
-            className="rounded-[10px] border px-2.5 py-1 text-sm transition-opacity hover:opacity-100"
-            style={{
-              borderColor: marked ? '#c9a56a' : hairline,
-              color: marked ? '#c9a56a' : 'inherit',
-              opacity: marked ? 1 : 0.8,
-            }}
+            className={`rounded-[10px] border px-2.5 py-1 text-sm transition-opacity hover:opacity-100 ${
+              marked ? 'border-accent text-accent opacity-100' : 'opacity-80'
+            }`}
+            style={marked ? undefined : { borderColor: hairline }}
             onClick={() => void toggleBookmark()}
           >
             {marked ? '★' : '☆'}
@@ -762,15 +773,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {highlights.map((r, i) => (
               <div
                 key={i}
-                className="pointer-events-none absolute rounded-[2px]"
-                style={{
-                  left: r.left,
-                  top: r.top,
-                  width: r.width,
-                  height: r.height,
-                  background: '#c9a56a',
-                  opacity: 0.28,
-                }}
+                className="pointer-events-none absolute rounded-[2px] bg-accent/[0.28]"
+                style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
               />
             ))}
           </div>
@@ -857,19 +861,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               {THEMES.map((t) => (
                 <button key={t.id} className="text-left" onClick={() => setThemeId(t.id)}>
                   <div
-                    className="flex h-16 items-center rounded-xl px-4"
-                    style={{
-                      background: rgbCss(t.bg),
-                      border: `2px solid ${t.id === themeId ? '#c9a56a' : '#2c2113'}`,
-                    }}
+                    className={`flex h-16 items-center rounded-xl border-2 px-4 ${
+                      t.id === themeId ? 'border-accent' : 'border-night-700'
+                    }`}
+                    style={{ background: rgbCss(t.bg) }}
                   >
                     <span className="font-serif text-xl" style={{ color: rgbCss(t.fg) }}>
                       Aa
                     </span>
                   </div>
                   <div
-                    className="mt-1.5 text-[11px]"
-                    style={{ color: t.id === themeId ? '#c9a56a' : '#9a875f' }}
+                    className={`mt-1.5 text-[11px] ${
+                      t.id === themeId ? 'text-accent' : 'text-ink-soft'
+                    }`}
                   >
                     {t.name}
                   </div>
@@ -1052,18 +1056,44 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </div>
                 {bookmarks.map((b) => (
                   <div key={b.id} className="group flex items-center gap-1">
+                    {noteFor === b.page ? (
+                      <input
+                        aria-label={`Note for page ${b.page}`}
+                        autoFocus
+                        placeholder={`Page ${b.page}`}
+                        className="mx-3 my-1 flex-1 rounded-md border border-accent/50 bg-inset px-2 py-1.5 font-serif text-[15px] text-ink-shelf outline-none"
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        onBlur={() => void commitNote()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void commitNote()
+                          else if (e.key === 'Escape') setNoteFor(null)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
+                        onClick={() => {
+                          setPage(b.page)
+                          setShowToc(false)
+                        }}
+                      >
+                        <span className="truncate font-serif text-[15px] text-ink-shelf">
+                          <span className="mr-2 text-accent">★</span>
+                          {b.note || `Page ${b.page}`}
+                        </span>
+                        <span className="text-sm tabular-nums text-ink-dim">{b.page}</span>
+                      </button>
+                    )}
                     <button
-                      className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
+                      aria-label={`Note on page ${b.page}`}
+                      className="rounded-md px-2 py-1 text-xs text-ink-faint hover:text-ink-body"
                       onClick={() => {
-                        setPage(b.page)
-                        setShowToc(false)
+                        setNoteDraft(b.note ?? '')
+                        setNoteFor(b.page)
                       }}
                     >
-                      <span className="truncate font-serif text-[15px] text-ink-shelf">
-                        <span className="mr-2 text-accent">★</span>
-                        {b.note || `Page ${b.page}`}
-                      </span>
-                      <span className="text-sm tabular-nums text-ink-dim">{b.page}</span>
+                      ✎
                     </button>
                     <button
                       aria-label={`Remove bookmark on page ${b.page}`}
