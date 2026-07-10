@@ -41,7 +41,9 @@ that always produces a readable dark page:
 - [x] Local storage (Dexie/IndexedDB): library, per-book profile, resume position
 - [x] Minimal reader: open, recolor, theme, page-turn, zoom
 - [x] Export a dark PDF (300 DPI, saturation-aware) — the "open in Books" flow
-- [ ] Library shelf UI + resume-on-open
+- [x] Library shelf (recolored covers, progress, delete, durable storage),
+      launch straight into your last book, immersive tap-to-hide chrome,
+      pinch-to-zoom (crisp re-render, not bitmap scaling)
 - [ ] **Text Mode** (reflow for full font / size / spacing control on prose)
 - [x] Image handling v2: page polarity (dark covers pass through), structural
       masking of declared image rects, content-derived photo masking inside

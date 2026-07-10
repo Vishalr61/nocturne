@@ -91,8 +91,9 @@ src/
 │   ├── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
 │   └── pipeline.ts   renderDarkPage: polarity, image masking, colour text —
 │                     the per-page decisions; shared by reader AND export
-├── storage/db.ts     Dexie: books (original bytes), profiles, progress. Local only.
-└── reader/Reader.tsx open->recolor->page-turn->theme->zoom; persists profile+progress
+├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress. Local only.
+├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
+└── reader/Reader.tsx recolor, tap zones (turn/immersive), pinch zoom; persists per book
 ```
 
 ## Roadmap (build order)
@@ -104,7 +105,8 @@ src/
 3. ✅ Image handling v2 (`engine/pipeline.ts`): page polarity (dark covers pass
    through), structural masking of declared XObject rects, content-derived
    masking for photos inside full-page bitmaps, colour-text lightness flip.
-4. Library shelf UI (your saved books) + resume-on-open.
+4. ✅ Library shelf (thumbnails, progress, delete, persistent storage) +
+   launch-into-last-book + immersive chrome toggle + pinch-to-zoom.
 5. **Text Mode** (reflow) for font/size/spacing on prose.
 6. Vector export (rewrite colour operators; selectable text in the export).
 7. Scanned-PDF OCR path.

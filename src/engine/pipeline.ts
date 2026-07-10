@@ -25,6 +25,8 @@ export interface DarkPageOptions {
   theme: Theme
   satCut: number
   strength?: number
+  /** Brightness of preserved images against the dark page (default 0.82). */
+  imageDim?: number
 }
 
 export interface DarkPageResult {
@@ -78,9 +80,29 @@ export async function renderDarkPage(
     inkFlip,
     colorText,
     mask,
-    imageDim: IMAGE_DIM,
+    imageDim: opts.imageDim ?? IMAGE_DIM,
   })
   return { source, cls, inkFlipped: inkFlip }
+}
+
+/**
+ * Render a small recolored page-1 thumbnail (JPEG data URL) for the shelf.
+ * Runs the exact same pipeline as the reader, just tiny and offscreen.
+ */
+export async function generateThumbnail(
+  page: PDFPageProxy,
+  theme: Theme,
+  widthPx = 280,
+): Promise<string> {
+  const canvas = document.createElement('canvas')
+  const recolor = new Recolorizer(canvas, /* preserveDrawingBuffer */ true)
+  try {
+    const scale = widthPx / page.getViewport({ scale: 1 }).width
+    await renderDarkPage(page, scale, 1, recolor, { theme, satCut: 0.25 })
+    return canvas.toDataURL('image/jpeg', 0.8)
+  } finally {
+    recolor.dispose()
+  }
 }
 
 /**
