@@ -97,7 +97,8 @@ src/
 │   └── pipeline.ts   renderDarkPage (+finishDarkPage for pre-rendered sources):
 │                     polarity, image masking, colour text — the per-page
 │                     decisions; shared by reader AND export
-├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress. Local only.
+├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress, bookmarks,
+│                     pendingTitles + backup/restore. Local only.
 ├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
 └── reader/Reader.tsx recolor, tap zones, pinch zoom, nav (scrubber/TOC),
                       next-page prefetch, margin crop; persists per book
@@ -114,9 +115,17 @@ src/
    masking for photos inside full-page bitmaps, colour-text lightness flip.
 4. ✅ Library shelf (thumbnails, progress, delete, persistent storage) +
    launch-into-last-book + immersive chrome toggle + pinch-to-zoom.
-5. **Text Mode** (reflow) for font/size/spacing on prose.
-6. Vector export (rewrite colour operators; selectable text in the export).
-7. Scanned-PDF OCR path.
+5. ✅ Search (in-book streaming + highlights, library filter), bookmarks,
+   rename/derived titles, library backup & restore.
+6. **Sync reading state** (not bytes) — positions/themes/titles/bookmarks +
+   a manifest, so a "ghost shelf" lists books whose PDF isn't on this device.
+   Content-hash ids make re-adding from Files resume exactly. PDFs still never
+   leave the device. Needs a Cloudflare account (`wrangler login`).
+7. Continuous scroll + landscape two-page spread.
+8. Selectable text layer → passage highlights (and text selection/copy).
+9. **Text Mode** (reflow) for font/size/spacing on prose.
+10. Vector export (rewrite colour operators; selectable text in the export).
+11. Scanned-PDF OCR path.
 
 ## Deployment
 
