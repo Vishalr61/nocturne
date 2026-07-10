@@ -4,16 +4,26 @@ import {
   bookmarkCounts,
   deleteBook,
   exportLibrary,
+  getSyncState,
   highlightCounts,
   importLibrary,
   isPersisted,
   listBooks,
+  listGhostBooks,
   renameBook,
   requestPersistentStorage,
   storageEstimate,
   type Book,
+  type KnownBook,
   type ProgressByBook,
 } from '../storage/db'
+import {
+  adoptSecret,
+  disableSync,
+  enableSync,
+  syncConfigured,
+  syncNow,
+} from '../storage/syncClient'
 import { importBook } from './import'
 
 // The library: a place to resume, not a file manager. A "Reading now" hero
@@ -51,15 +61,25 @@ export function Shelf({ onOpen }: ShelfProps) {
   const [draft, setDraft] = useState('')
   const [filter, setFilter] = useState('')
   const editRef = useRef<HTMLInputElement | null>(null)
+  // Sync (opt-in, state-only). Books that live elsewhere show as "ghosts".
+  const [ghosts, setGhosts] = useState<KnownBook[]>([])
+  const [syncOn, setSyncOn] = useState(false)
+  const [secret, setSecret] = useState('')
+  const [syncMsg, setSyncMsg] = useState('')
+  const [syncing, setSyncing] = useState(false)
+  const [showSyncPanel, setShowSyncPanel] = useState(false)
+  const [adoptDraft, setAdoptDraft] = useState('')
 
   const refresh = useCallback(async () => {
-    const [bs, ps, est, persisted, bm, hl] = await Promise.all([
+    const [bs, ps, est, persisted, bm, hl, gh, ss] = await Promise.all([
       listBooks(),
       allProgress(),
       storageEstimate(),
       isPersisted(),
       bookmarkCounts(),
       highlightCounts(),
+      listGhostBooks(),
+      getSyncState(),
     ])
     setBooks(bs)
     setProgress(ps)
@@ -68,15 +88,72 @@ export function Shelf({ onOpen }: ShelfProps) {
     for (const [id, n] of Object.entries(hl)) total[id] = (total[id] ?? 0) + n
     setMarks(total)
     setDurable(persisted)
+    setGhosts(gh)
+    setSyncOn(ss.enabled)
+    setSecret(ss.secret ?? '')
     if (est && est.quota > 0) {
       setStorage(`${fmtBytes(est.used)} of ${fmtBytes(est.quota)} used`)
     }
   }, [])
 
+  // A push+pull, then refresh so new ghosts / synced progress appear.
+  const runSync = useCallback(
+    async (label = 'Syncing…') => {
+      setSyncing(true)
+      setSyncMsg(label)
+      const r = await syncNow()
+      setSyncing(false)
+      setSyncMsg(
+        r.ok ? `Synced · ${r.pushed ?? 0} sent, ${r.pulled ?? 0} received` : `Sync: ${r.reason}`,
+      )
+      await refresh()
+    },
+    [refresh],
+  )
+
   useEffect(() => {
     // Books are big and re-adding is a chore; ask the browser to keep them.
-    void requestPersistentStorage().then(() => refresh())
-  }, [refresh])
+    void requestPersistentStorage().then(async () => {
+      await refresh()
+      // Pull anything new from other devices on open.
+      const ss = await getSyncState()
+      if (ss.enabled && syncConfigured()) void runSync('Checking for updates…')
+    })
+  }, [refresh, runSync])
+
+  const onToggleSync = useCallback(async () => {
+    if (syncOn) {
+      await disableSync()
+      setSyncOn(false)
+      setSyncMsg('')
+    } else {
+      const s = await enableSync()
+      setSyncOn(true)
+      setSecret(s)
+      await runSync('First sync…')
+    }
+  }, [syncOn, runSync])
+
+  // Close the sync panel on Escape, like the reader's overlays.
+  useEffect(() => {
+    if (!showSyncPanel) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowSyncPanel(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showSyncPanel])
+
+  const onAdopt = useCallback(async () => {
+    if (await adoptSecret(adoptDraft)) {
+      setAdoptDraft('')
+      setSecret(adoptDraft.trim())
+      setSyncOn(true)
+      await runSync('Pulling your library…')
+    } else {
+      setSyncMsg('That secret doesn’t look right')
+    }
+  }, [adoptDraft, runSync])
 
   const onBackup = useCallback(async () => {
     const backup = await exportLibrary()
@@ -127,8 +204,9 @@ export function Shelf({ onOpen }: ShelfProps) {
       if (!window.confirm(`Remove “${book.title}” from Nocturne? Your reading position is deleted too.`)) return
       await deleteBook(book.id)
       void refresh()
+      if (syncOn && syncConfigured()) void syncNow() // propagate the deletion
     },
-    [refresh],
+    [refresh, syncOn],
   )
 
   const startRename = useCallback((book: Book) => {
@@ -144,7 +222,8 @@ export function Shelf({ onOpen }: ShelfProps) {
     setEditing(null)
     await renameBook(id, draft)
     void refresh()
-  }, [editing, draft, refresh])
+    if (syncOn && syncConfigured()) void syncNow()
+  }, [editing, draft, refresh, syncOn])
 
   // "Reading now" = the book you touched most recently.
   const hero =
@@ -192,7 +271,7 @@ export function Shelf({ onOpen }: ShelfProps) {
       </header>
 
       <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
-        {books === null ? null : books.length === 0 ? (
+        {books === null ? null : books.length === 0 && ghosts.length === 0 ? (
           <div className="anim-rise mt-24 text-center text-ink-dim">
             <p className="text-4xl">🌙</p>
             <p className="mt-5 font-serif text-xl text-ink-mid">No books yet.</p>
@@ -374,6 +453,38 @@ export function Shelf({ onOpen }: ShelfProps) {
                   </div>
                 )
               })}
+
+              {/* Ghosts: books you have on another device but not here. Your
+                  place/marks are already synced; add the file to start reading. */}
+              {!needle &&
+                ghosts.map((g) => (
+                  <div key={`ghost-${g.bookId}`} className="anim-rise relative">
+                    <label className="block cursor-pointer text-left">
+                      <div
+                        className="grid aspect-[3/4] w-full place-items-center rounded-[13px] border border-dashed border-line bg-night-900/50 p-4 text-center"
+                        title="On another device — add its file to read here"
+                      >
+                        <div>
+                          <div className="text-2xl opacity-40">＋</div>
+                          <div className="mt-2 text-[11px] uppercase tracking-[0.12em] text-ink-faint">
+                            Add file
+                          </div>
+                        </div>
+                      </div>
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        className="hidden"
+                        disabled={busy}
+                        onChange={(e) => e.target.files?.[0] && void onAdd(e.target.files[0])}
+                      />
+                    </label>
+                    <div className="mt-3 truncate font-serif text-[15px] leading-tight text-ink-mid">
+                      {g.title}
+                    </div>
+                    <div className="mt-1 text-xs text-ink-faint">On your other device</div>
+                  </div>
+                ))}
             </div>
           </>
         )}
@@ -393,6 +504,14 @@ export function Shelf({ onOpen }: ShelfProps) {
         </span>
         <span className="flex items-center gap-4">
           {note && <span className="text-ink-dim">{note}</span>}
+          {syncConfigured() && (
+            <button
+              className="underline-offset-2 hover:text-ink-soft hover:underline"
+              onClick={() => setShowSyncPanel((s) => !s)}
+            >
+              {syncOn ? (syncing ? 'Syncing…' : 'Sync ✓') : 'Sync'}
+            </button>
+          )}
           <button className="underline-offset-2 hover:text-ink-soft hover:underline" onClick={() => void onBackup()}>
             Back up
           </button>
@@ -407,6 +526,99 @@ export function Shelf({ onOpen }: ShelfProps) {
           </label>
         </span>
       </footer>
+
+      {/* Sync panel: device secret + controls. Opt-in, state-only. */}
+      {showSyncPanel && (
+        <div
+          className="anim-fade fixed inset-0 z-40 flex items-end justify-center bg-black/50 sm:items-center"
+          onClick={() => setShowSyncPanel(false)}
+        >
+          <div
+            className="anim-rise w-full max-w-md rounded-t-2xl border border-line bg-panel p-6 sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-serif text-lg text-ink-bright">Sync across devices</h3>
+              <button
+                aria-label="Close sync"
+                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft hover:text-ink-body"
+                onClick={() => setShowSyncPanel(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <p className="mb-5 text-xs leading-relaxed text-ink-faint">
+              Your reading position, look, bookmarks and highlights sync end-to-end encrypted. Your
+              PDFs never leave this device — on another device you re-add the file and it resumes.
+            </p>
+
+            <label className="mb-5 flex items-center justify-between">
+              <span className="text-[13px] text-ink-body">Sync this device</span>
+              <input
+                type="checkbox"
+                aria-label="Enable sync"
+                className="h-4 w-4 accent-accent"
+                checked={syncOn}
+                onChange={() => void onToggleSync()}
+              />
+            </label>
+
+            {syncOn && (
+              <>
+                <div className="mb-1 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Your device secret
+                </div>
+                <div className="mb-2 flex gap-2">
+                  <input
+                    aria-label="Device secret"
+                    readOnly
+                    className="flex-1 truncate rounded-lg border border-line bg-inset px-2.5 py-2 font-mono text-xs text-ink-mid"
+                    value={secret}
+                  />
+                  <button
+                    className="rounded-lg bg-accent px-3 py-2 text-[13px] font-semibold text-accent-on"
+                    onClick={() => void navigator.clipboard?.writeText(secret)}
+                  >
+                    Copy
+                  </button>
+                </div>
+                <p className="mb-5 text-xs leading-relaxed text-ink-faint">
+                  Paste this into Nocturne on your other device to join the same library. Anyone with
+                  it can read your sync data — keep it private.
+                </p>
+                <button
+                  className="mb-4 w-full rounded-xl border border-accent/40 py-2.5 text-sm font-medium text-accent hover:border-accent disabled:opacity-50"
+                  disabled={syncing}
+                  onClick={() => void runSync('Syncing…')}
+                >
+                  {syncing ? 'Syncing…' : 'Sync now'}
+                </button>
+              </>
+            )}
+
+            <details className="text-xs text-ink-faint">
+              <summary className="cursor-pointer">Use a secret from another device</summary>
+              <div className="mt-2 flex gap-2">
+                <input
+                  aria-label="Paste secret"
+                  placeholder="Paste device secret"
+                  className="flex-1 rounded-lg border border-line bg-inset px-2.5 py-2 font-mono text-xs text-ink-body outline-none focus:border-accent/60"
+                  value={adoptDraft}
+                  onChange={(e) => setAdoptDraft(e.target.value)}
+                />
+                <button
+                  className="rounded-lg bg-night-700 px-3 py-2 text-[13px] text-ink-body"
+                  onClick={() => void onAdopt()}
+                >
+                  Use
+                </button>
+              </div>
+            </details>
+
+            {syncMsg && <div className="mt-4 text-center text-xs text-ink-dim">{syncMsg}</div>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

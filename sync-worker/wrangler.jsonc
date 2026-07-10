@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nocturne-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-07-01",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nocturne-sync",
+      "database_id": "8682f19e-8892-43af-8deb-a54085def46d"
+    }
+  ]
+}

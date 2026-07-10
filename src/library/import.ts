@@ -1,7 +1,7 @@
 import { openPdf, type PDFDocumentProxy } from '../engine/pdf'
 import { generateThumbnail } from '../engine/pipeline'
 import { DEFAULT_THEME } from '../engine/theme'
-import { addBook, hashBytes, takePendingTitle } from '../storage/db'
+import { addBook, getKnownBook, hashBytes, takePendingTitle } from '../storage/db'
 
 // Importing a book = copying it into the app's own storage. On iOS the file
 // picker is the Files app (including iCloud Drive), so this is the whole
@@ -20,19 +20,24 @@ export async function importBook(file: File): Promise<string> {
     // Thumbnail is cosmetic; never let it block adding a book.
   }
 
-  // A restored backup may already know this book's name (matched by content
-  // hash) — that beats anything we could derive from the file.
-  const restored = await takePendingTitle(id)
+  // A synced device (ghost) or a restored backup may already know this book's
+  // name (matched by content hash) — that beats anything we could derive from
+  // the file. When it comes from sync, keep its updatedAt so re-adding the file
+  // doesn't look like a newer edit and clobber the synced title.
+  const known = await getKnownBook(id)
+  const restored = known ? undefined : await takePendingTitle(id)
+  const title = known?.title ?? restored ?? (await deriveTitle(doc, file.name))
 
   await addBook({
     id,
-    title: restored ?? (await deriveTitle(doc, file.name)),
-    addedAt: Date.now(),
+    title,
+    addedAt: known?.addedAt ?? Date.now(),
     pageCount: doc.numPages,
     size: buf.byteLength,
     data: buf,
     thumb,
     lastOpenedAt: Date.now(),
+    updatedAt: known?.updatedAt, // undefined for a brand-new book → addBook stamps now
   })
   await doc.destroy()
   return id

@@ -105,8 +105,14 @@ src/
 │   └── pipeline.ts   renderDarkPage (+finishDarkPage for pre-rendered sources):
 │                     polarity, image masking, colour text — the per-page
 │                     decisions; shared by reader AND export
-├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress, bookmarks,
-│                     pendingTitles + backup/restore. Local only.
+├── storage/
+│   ├── db.ts         Dexie: books (bytes+thumb), profiles, progress, bookmarks,
+│   │                 highlights, tombstones, knownBooks (ghosts), syncState.
+│   ├── syncCrypto.ts device secret → userKey/recordId (opaque) + AES-GCM E2E
+│   ├── syncModel.ts  collect local changes / apply remote (last-write-wins)
+│   └── syncClient.ts push+pull loop, cursor, enable/adopt secret
+├── sync-worker/      Cloudflare Worker + D1 (schema.sql): opaque LWW sync store
+│                     — ciphertext only, never PDF bytes. Own deploy (wrangler).
 ├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
 └── reader/
     ├── Reader.tsx    paged reader: recolor, tap zones, pinch zoom, nav
@@ -130,10 +136,15 @@ src/
    launch-into-last-book + immersive chrome toggle + pinch-to-zoom.
 5. ✅ Search (in-book streaming + highlights, library filter), bookmarks,
    rename/derived titles, library backup & restore.
-6. **Sync reading state** (not bytes) — positions/themes/titles/bookmarks +
-   a manifest, so a "ghost shelf" lists books whose PDF isn't on this device.
-   Content-hash ids make re-adding from Files resume exactly. PDFs still never
-   leave the device. Needs a Cloudflare account (`wrangler login`).
+6. 🟡 **Sync reading state** (not bytes) — built + verified, awaiting a
+   `workers.dev` subdomain to go live. Positions/themes/titles/bookmarks/
+   highlights sync end-to-end encrypted; a "ghost shelf" lists books whose PDF
+   isn't on this device; content-hash ids make re-adding from Files resume
+   exactly. PDFs never leave the device. Worker + D1 in `sync-worker/` (deployed,
+   pending subdomain); client in `storage/sync*.ts`. Set `DEFAULT_SYNC_URL` in
+   `storage/syncClient.ts` once the subdomain exists (`syncConfigured()` gates
+   the UI until then). Merge is per-record last-write-wins keyed by `updatedAt`;
+   deletes propagate as tombstones.
 7. ✅ Selectable text layer (`reader/TextLayer.tsx`) → passage highlights,
    copy. Off by default ("T" toggles select mode) so taps still turn pages.
    Highlights persist as character RANGES, never pixel rects, so they survive

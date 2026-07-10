@@ -1,9 +1,12 @@
 import Dexie, { type EntityTable } from 'dexie'
 
-// Local-only persistence. No accounts, no server: your library, your per-book look,
-// and your reading position all live in the browser's IndexedDB. The data layer is
-// deliberately behind this small module so cloud sync can be added later without
-// the rest of the app knowing (swap the impl, keep the shape).
+// Local-first persistence: your library, your per-book look, and your reading
+// position live in the browser's IndexedDB and work fully offline. An opt-in
+// state sync (see syncClient.ts) can mirror the small stuff — positions, looks,
+// bookmarks, highlights, titles — across your devices via an end-to-end
+// encrypted store; the PDF bytes never leave the device. `updatedAt` on the
+// synced records is the last-write-wins key; deletions are recorded as
+// tombstones so they propagate instead of resurrecting.
 
 export interface Book {
   id: string // stable hash of the file bytes
@@ -15,6 +18,8 @@ export interface Book {
   /** Small recolored render of page 1 (JPEG data URL) for the shelf. */
   thumb?: string
   lastOpenedAt?: number
+  /** Last change to synced metadata (title); the LWW key. */
+  updatedAt?: number
 }
 
 export interface Profile {
@@ -31,6 +36,8 @@ export interface Profile {
   viewMode?: 'paged' | 'scroll'
   /** Show two pages side by side when the screen is landscape (paged mode). */
   spread?: boolean
+  /** Last edit; the LWW key for sync. */
+  updatedAt?: number
 }
 
 export interface Progress {
@@ -57,6 +64,7 @@ export interface Bookmark {
   page: number
   note?: string
   createdAt: number
+  updatedAt?: number
 }
 
 export const bookmarkId = (bookId: string, page: number) => `${bookId}:${page}`
@@ -74,6 +82,39 @@ export interface Highlight {
   end: number
   text: string
   createdAt: number
+  updatedAt?: number
+}
+
+/** A recorded deletion, kept so it propagates through sync (no resurrection).
+ *  naturalKey is the plaintext logical key (e.g. "bookmark:<id>:<page>"), which
+ *  stays local; sync turns it into an opaque record id. */
+export interface Tombstone {
+  naturalKey: string
+  deletedAt: number
+  /** Enough to rebuild the sync payload for the delete. */
+  body: Record<string, unknown>
+}
+
+/** Book metadata learned from sync for a book whose bytes aren't on this device
+ *  yet — shown as a "ghost" on the shelf until you re-add the file. */
+export interface KnownBook {
+  bookId: string
+  title: string
+  pageCount: number
+  addedAt: number
+  updatedAt: number
+}
+
+/** Singleton sync configuration (id is always "state"). */
+export interface SyncState {
+  id: 'state'
+  enabled: boolean
+  secret?: string
+  /** Server cursor: highest `seq` pulled. */
+  cursor: number
+  /** High-water mark of local `updatedAt` already pushed. */
+  pushedHigh: number
+  lastSyncAt?: number
 }
 
 const db = new Dexie('nocturne') as Dexie & {
@@ -83,6 +124,9 @@ const db = new Dexie('nocturne') as Dexie & {
   pendingTitles: EntityTable<PendingTitle, 'bookId'>
   bookmarks: EntityTable<Bookmark, 'id'>
   highlights: EntityTable<Highlight, 'id'>
+  tombstones: EntityTable<Tombstone, 'naturalKey'>
+  knownBooks: EntityTable<KnownBook, 'bookId'>
+  syncState: EntityTable<SyncState, 'id'>
 }
 
 db.version(1).stores({
@@ -115,8 +159,21 @@ db.version(4).stores({
   highlights: 'id, bookId, [bookId+page]',
 })
 
+db.version(5).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+  highlights: 'id, bookId, [bookId+page]',
+  tombstones: 'naturalKey, deletedAt',
+  knownBooks: 'bookId',
+  syncState: 'id',
+})
+
 export async function addBook(book: Book): Promise<void> {
-  await db.books.put(book)
+  await db.books.put({ ...book, updatedAt: book.updatedAt ?? Date.now() })
+  await db.knownBooks.delete(book.id) // it's local now; no longer a ghost
 }
 
 export async function listBooks(): Promise<Book[]> {
@@ -127,10 +184,31 @@ export async function getBook(id: string): Promise<Book | undefined> {
   return db.books.get(id)
 }
 
-/** Remove a book and everything known about it (bytes, look, position, marks). */
+// Natural (plaintext) keys for syncable records. These never leave the device;
+// sync turns each into an opaque id. Shared with syncModel.ts so both sides agree.
+export const natBook = (id: string) => `book:${id}`
+export const natProfile = (id: string) => `profile:${id}`
+export const natProgress = (id: string) => `progress:${id}`
+export const natBookmark = (id: string, page: number) => `bookmark:${id}:${page}`
+export const natHighlight = (hid: string) => `highlight:${hid}`
+
+async function recordTombstone(naturalKey: string, body: Record<string, unknown>): Promise<void> {
+  await db.tombstones.put({ naturalKey, deletedAt: Date.now(), body: { ...body, deleted: true } })
+}
+
+/** Remove a book and everything known about it (bytes, look, position, marks).
+ *  Records a single book tombstone; applying it elsewhere cascades the same way. */
 export async function deleteBook(id: string): Promise<void> {
+  await applyDeleteBook(id)
+  await recordTombstone(natBook(id), { t: 'book', bookId: id })
+}
+
+/** Delete a book and its children WITHOUT tombstoning — used when applying a
+ *  remote deletion (a tombstone here would echo back out). */
+export async function applyDeleteBook(id: string): Promise<void> {
   await Promise.all([
     db.books.delete(id),
+    db.knownBooks.delete(id),
     db.profiles.delete(id),
     db.progress.delete(id),
     db.bookmarks.where('bookId').equals(id).delete(),
@@ -152,13 +230,16 @@ export async function highlightsOnPage(bookId: string, page: number): Promise<Hi
 export async function addHighlight(
   h: Omit<Highlight, 'id' | 'createdAt'>,
 ): Promise<Highlight> {
-  const row: Highlight = { ...h, id: crypto.randomUUID(), createdAt: Date.now() }
+  const now = Date.now()
+  const row: Highlight = { ...h, id: crypto.randomUUID(), createdAt: now, updatedAt: now }
   await db.highlights.put(row)
   return row
 }
 
 export async function removeHighlight(id: string): Promise<void> {
+  const h = await db.highlights.get(id)
   await db.highlights.delete(id)
+  if (h) await recordTombstone(natHighlight(id), { t: 'highlight', id, bookId: h.bookId, page: h.page })
 }
 
 /** How many highlights each book has, for the shelf. */
@@ -177,13 +258,14 @@ export async function listBookmarks(bookId: string): Promise<Bookmark[]> {
 }
 
 export async function addBookmark(bookId: string, page: number, note?: string): Promise<void> {
-  await db.bookmarks.put({ id: bookmarkId(bookId, page), bookId, page, note, createdAt: Date.now() })
+  const now = Date.now()
+  await db.bookmarks.put({ id: bookmarkId(bookId, page), bookId, page, note, createdAt: now, updatedAt: now })
 }
 
 /** Label a bookmark. An empty note clears it, and the row falls back to "Page N". */
 export async function setBookmarkNote(bookId: string, page: number, note: string): Promise<void> {
   const t = note.trim()
-  await db.bookmarks.update(bookmarkId(bookId, page), { note: t || undefined })
+  await db.bookmarks.update(bookmarkId(bookId, page), { note: t || undefined, updatedAt: Date.now() })
 }
 
 /** How many bookmarks each book has, for the shelf. */
@@ -196,6 +278,7 @@ export async function bookmarkCounts(): Promise<Record<string, number>> {
 
 export async function removeBookmark(bookId: string, page: number): Promise<void> {
   await db.bookmarks.delete(bookmarkId(bookId, page))
+  await recordTombstone(natBookmark(bookId, page), { t: 'bookmark', bookId, page })
 }
 
 export async function touchBook(id: string): Promise<void> {
@@ -209,7 +292,7 @@ export async function saveThumb(id: string, thumb: string): Promise<void> {
 /** Rename a book on the shelf. The id is the content hash, so it never changes. */
 export async function renameBook(id: string, title: string): Promise<void> {
   const t = title.trim()
-  if (t) await db.books.update(id, { title: t })
+  if (t) await db.books.update(id, { title: t, updatedAt: Date.now() })
 }
 
 /** The book to resume on launch: the one most recently opened or read. */
@@ -224,7 +307,7 @@ export async function latestBookId(): Promise<string | undefined> {
 }
 
 export async function saveProfile(p: Profile): Promise<void> {
-  await db.profiles.put(p)
+  await db.profiles.put({ ...p, updatedAt: Date.now() })
 }
 
 export async function getProfile(bookId: string): Promise<Profile | undefined> {
@@ -377,4 +460,56 @@ export async function takePendingTitle(id: string): Promise<string | undefined> 
   return row.title
 }
 
+// --- sync state ---------------------------------------------------------------
+
+const DEFAULT_SYNC: SyncState = { id: 'state', enabled: false, cursor: 0, pushedHigh: 0 }
+
+export async function getSyncState(): Promise<SyncState> {
+  return (await db.syncState.get('state')) ?? DEFAULT_SYNC
+}
+
+export async function setSyncState(patch: Partial<SyncState>): Promise<SyncState> {
+  const next = { ...(await getSyncState()), ...patch, id: 'state' as const }
+  await db.syncState.put(next)
+  return next
+}
+
+// --- raw reads for the sync engine (it builds/*applies* records itself) -------
+
+export function allProfiles() {
+  return db.profiles.toArray()
+}
+export function allBookmarks() {
+  return db.bookmarks.toArray()
+}
+export function allHighlights() {
+  return db.highlights.toArray()
+}
+export function allProgressRows() {
+  return db.progress.toArray()
+}
+export function allBooks() {
+  return db.books.toArray()
+}
+export function allTombstones() {
+  return db.tombstones.toArray()
+}
+
+/** Books learned from sync whose bytes aren't on this device yet (ghost shelf). */
+export async function listGhostBooks(): Promise<KnownBook[]> {
+  const [known, local] = await Promise.all([db.knownBooks.toArray(), db.books.toArray()])
+  const here = new Set(local.map((b) => b.id))
+  return known.filter((k) => !here.has(k.bookId)).sort((a, b) => b.addedAt - a.addedAt)
+}
+
+export async function upsertKnownBook(k: KnownBook): Promise<void> {
+  await db.knownBooks.put(k)
+}
+
+export async function getKnownBook(bookId: string): Promise<KnownBook | undefined> {
+  return db.knownBooks.get(bookId)
+}
+
+// Direct table access for the sync engine's LWW apply (writes preserve the
+// remote updatedAt and never record tombstones — see syncModel.ts).
 export { db }
