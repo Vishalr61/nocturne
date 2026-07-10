@@ -13,19 +13,41 @@ export async function openPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
   return pdfjs.getDocument({ data: data.slice(0) }).promise
 }
 
+// iOS Safari refuses canvases beyond ~16.7M pixels and its WebGL textures top
+// out at 8192 px per side; past either, pages render blank or the whole tab is
+// killed for memory (the "app crashed" symptom). Clamping the effective dpr
+// keeps the backing store inside that budget: at extreme zoom the render gets
+// slightly soft instead of the app dying. Zoom still re-renders vectors fresh —
+// this only caps the resolution ceiling, it never scales a stale bitmap.
+// Just under iOS's hard 16,777,216-px area limit: the clamp solves for an
+// exact fit and Math.ceil on each dimension would nudge it past the line.
+const MAX_CANVAS_PIXELS = 16_000_000
+const MAX_CANVAS_DIM = 8192
+
+/** Largest dpr ≤ `dpr` whose render of this page fits the canvas budget. */
+export function clampRenderDpr(page: PDFPageProxy, cssScale: number, dpr: number): number {
+  const vp = page.getViewport({ scale: cssScale * dpr })
+  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (vp.width * vp.height))
+  const byDim = MAX_CANVAS_DIM / Math.max(vp.width, vp.height)
+  return dpr * Math.min(1, byArea, byDim)
+}
+
 /**
  * Render a page to an offscreen canvas at the given CSS scale, sharpened by the
  * device pixel ratio. This canvas is the *source texture* for the recolor pass —
  * re-rendered fresh at every zoom so text stays vector-crisp, never a scaled bitmap.
+ * Pass `into` to reuse one canvas across renders (page turns would otherwise churn
+ * ~100 MB allocations on a phone).
  */
 export async function renderPageToCanvas(
   page: PDFPageProxy,
   cssScale: number,
   dpr = Math.min(window.devicePixelRatio || 1, 3),
+  into?: HTMLCanvasElement,
 ): Promise<HTMLCanvasElement> {
   const viewport = page.getViewport({ scale: cssScale * dpr })
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.ceil(viewport.width)
+  const canvas = into ?? document.createElement('canvas')
+  canvas.width = Math.ceil(viewport.width) // assigning width also clears a reused canvas
   canvas.height = Math.ceil(viewport.height)
   const ctx = canvas.getContext('2d', { willReadFrequently: false })!
   await page.render({ canvasContext: ctx, viewport }).promise

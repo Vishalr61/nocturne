@@ -146,7 +146,10 @@ reading screenshots. The setup that works on this machine:
 - **Never invert images.** The whole point is recolouring ink while preserving
   colour content. Any new recolor path must respect this.
 - **No blur.** Never persist/scale a rasterized page as the display source;
-  re-render vectors at the target resolution and recolor that.
+  re-render vectors at the target resolution and recolor that. One deliberate
+  cap: `clampRenderDpr` (engine/pdf.ts) keeps any canvas ≤ ~16.7M px / 8192 px
+  per side — iOS's hard limits — so extreme zoom renders slightly soft instead
+  of blank pages or a memory-killed tab. Still a fresh vector render each time.
 - **Local-only & private.** PDFs never leave the device. Keep the `storage/db.ts`
   seam clean so cloud sync can be added later without touching the rest of the app.
 - **DRM-free only.** Never add anything that circumvents PDF protection.

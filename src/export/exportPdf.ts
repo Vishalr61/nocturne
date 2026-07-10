@@ -32,6 +32,7 @@ export async function exportDarkPdf(doc: PDFDocumentProxy, opts: ExportOptions):
 
   const out = await PDFDocument.create()
   const glCanvas = document.createElement('canvas')
+  const srcCanvas = document.createElement('canvas') // reused for every page render
   const recolor = new Recolorizer(glCanvas, /* preserveDrawingBuffer */ true)
 
   try {
@@ -40,10 +41,12 @@ export async function exportDarkPdf(doc: PDFDocumentProxy, opts: ExportOptions):
 
       // dpr=1: renderScale already encodes the target DPI. Same pipeline as the
       // live reader — polarity, image masking, colour text — so what you export
-      // is what you saw.
+      // is what you saw. (The pipeline clamps oversized pages to the canvas
+      // budget, so a large-format PDF at 300 DPI can't kill the tab.)
       await renderDarkPage(page, renderScale, 1, recolor, {
         theme: opts.theme,
         satCut: opts.satCut,
+        sourceCanvas: srcCanvas,
       })
 
       const bytes = await canvasJpeg(glCanvas, quality)

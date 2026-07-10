@@ -1,5 +1,5 @@
 import type { PDFPageProxy } from 'pdfjs-dist'
-import { renderPageToCanvas } from './pdf'
+import { clampRenderDpr, renderPageToCanvas } from './pdf'
 import { classifyPage, type PageClassification, type Rect } from './classify'
 import { Recolorizer } from './recolor'
 import type { Theme } from './theme'
@@ -27,6 +27,8 @@ export interface DarkPageOptions {
   strength?: number
   /** Brightness of preserved images against the dark page (default 0.82). */
   imageDim?: number
+  /** Reuse this canvas as the pdf.js render target across calls (memory churn). */
+  sourceCanvas?: HTMLCanvasElement
 }
 
 export interface DarkPageResult {
@@ -35,6 +37,8 @@ export interface DarkPageResult {
   cls: PageClassification
   /** False when the page was detected as already-dark and passed through. */
   inkFlipped: boolean
+  /** dpr actually rendered at — less than requested when the canvas budget clamped it. */
+  dpr: number
 }
 
 /** Declared images covering less than this fraction of the page are "embedded". */
@@ -58,8 +62,11 @@ export async function renderDarkPage(
   recolor: Recolorizer,
   opts: DarkPageOptions,
 ): Promise<DarkPageResult> {
+  // Clamp here, in the shared pipeline, so no caller (reader zoom, export DPI)
+  // can ever ask for a canvas iOS will refuse or be killed for.
+  const safeDpr = clampRenderDpr(page, cssScale, dpr)
   const [source, cls] = await Promise.all([
-    renderPageToCanvas(page, cssScale, dpr),
+    renderPageToCanvas(page, cssScale, safeDpr, opts.sourceCanvas),
     classifyPage(page),
   ])
 
@@ -68,7 +75,7 @@ export async function renderDarkPage(
 
   let mask: HTMLCanvasElement | null = null
   if (inkFlip) {
-    const declared = declaredImageRects(page, cls.imageRects, cssScale * dpr, source)
+    const declared = declaredImageRects(page, cls.imageRects, cssScale * safeDpr, source)
     const found = contentPhotoRects(source)
     mask = paintMask([...declared, ...found], source.width, source.height)
   }
@@ -82,7 +89,7 @@ export async function renderDarkPage(
     mask,
     imageDim: opts.imageDim ?? IMAGE_DIM,
   })
-  return { source, cls, inkFlipped: inkFlip }
+  return { source, cls, inkFlipped: inkFlip, dpr: safeDpr }
 }
 
 /**

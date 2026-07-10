@@ -33,6 +33,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const recolorRef = useRef<Recolorizer | null>(null)
+  // One offscreen canvas reused for every pdf.js render: page turns on a phone
+  // would otherwise allocate (and leave for GC) tens of MB per turn.
+  const sourceRef = useRef<HTMLCanvasElement | null>(null)
   const docRef = useRef<PDFDocumentProxy | null>(null)
   const loadedIdRef = useRef<string | null>(null)
 
@@ -108,6 +111,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const canvas = canvasRef.current
     if (!doc || !canvas) return
     if (!recolorRef.current) recolorRef.current = new Recolorizer(canvas)
+    if (!sourceRef.current) sourceRef.current = document.createElement('canvas')
 
     const pdfPage = await doc.getPage(page)
 
@@ -122,19 +126,21 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const cssScale = Math.max(0.1, containerWidth / pageWidth) * zoom
 
     // The pipeline decides polarity, image masking, and colour-text handling
-    // per page, then draws the recolored result into our canvas.
-    const { source, cls: classification } = await renderDarkPage(
+    // per page, then draws the recolored result into our canvas. It may clamp
+    // the dpr to keep the canvas inside iOS's memory budget (extreme zoom).
+    const { source, cls: classification, dpr: renderedDpr } = await renderDarkPage(
       pdfPage,
       cssScale,
       dpr,
       recolorRef.current,
-      { theme: themeById(themeId), satCut: SAT_CUT, imageDim },
+      { theme: themeById(themeId), satCut: SAT_CUT, imageDim, sourceCanvas: sourceRef.current },
     )
     setCls(classification)
     // Display exactly at render resolution; when zoom > 1 the canvas overflows
-    // the container and overflow-auto provides panning.
-    canvas.style.width = `${source.width / dpr}px`
-    canvas.style.height = `${source.height / dpr}px`
+    // the container and overflow-auto provides panning. If the dpr was clamped,
+    // the CSS size still honours the requested zoom (slightly soft beats a crash).
+    canvas.style.width = `${source.width / renderedDpr}px`
+    canvas.style.height = `${source.height / renderedDpr}px`
     canvas.style.transform = '' // clear any live pinch preview
 
     // Keep the pinch focal point where the fingers were.
@@ -147,16 +153,47 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [page, zoom, themeId, imageDim, docVersion])
 
-  useEffect(() => {
-    void draw()
+  // Draws are serialized: pdf.js render and the GL pass each reuse one canvas,
+  // and two in-flight draws would interleave into garbage. Rapid page turns
+  // supersede queued-but-not-started draws, so only the latest page renders.
+  const drawChainRef = useRef<Promise<void>>(Promise.resolve())
+  const drawSeqRef = useRef(0)
+  const enqueueDraw = useCallback(() => {
+    const seq = ++drawSeqRef.current
+    drawChainRef.current = drawChainRef.current
+      .then(() => (seq === drawSeqRef.current ? draw() : undefined))
+      .catch(() => undefined) // a failed draw must not stall the chain
   }, [draw])
+
+  useEffect(() => {
+    enqueueDraw()
+  }, [enqueueDraw])
 
   // Re-render on viewport changes (rotation, window resize) so fit-width holds.
   useEffect(() => {
-    const onResize = () => void draw()
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [draw])
+    window.addEventListener('resize', enqueueDraw)
+    return () => window.removeEventListener('resize', enqueueDraw)
+  }, [enqueueDraw])
+
+  // iOS kills WebGL contexts under memory pressure or when the PWA is
+  // backgrounded. Without these handlers the canvas stays black until a manual
+  // reload — which reads as a crash. preventDefault on "lost" is what tells the
+  // browser we want "restored" to fire; then we rebuild the GL state and redraw.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const onLost = (e: Event) => e.preventDefault()
+    const onRestored = () => {
+      recolorRef.current = null // program/textures died with the old context
+      enqueueDraw()
+    }
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
+    return () => {
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
+    }
+  }, [enqueueDraw])
 
   // --- pinch to zoom ----------------------------------------------------------
   useEffect(() => {
