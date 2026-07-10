@@ -46,6 +46,7 @@ export function Shelf({ onOpen }: ShelfProps) {
   /** Book id being renamed inline, and the draft text. */
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [filter, setFilter] = useState('')
   const editRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
@@ -141,6 +142,9 @@ export function Shelf({ onOpen }: ShelfProps) {
     books && books.length
       ? [...books].sort((a, b) => lastTouched(b, progress) - lastTouched(a, progress))[0]
       : null
+
+  const needle = filter.trim().toLowerCase()
+  const shown = !books ? [] : needle ? books.filter((b) => b.title.toLowerCase().includes(needle)) : books
 
   const meta = (b: Book) => {
     const p = progress[b.id]
@@ -256,17 +260,30 @@ export function Shelf({ onOpen }: ShelfProps) {
               </section>
             )}
 
-            <div className="mb-5 mt-12 flex items-baseline justify-between">
+            <div className="mb-5 mt-12 flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="font-serif text-[22px] text-ink-head">Your shelf</h2>
-              <span className="text-[13px] text-ink-dim">
-                {books.length} {books.length === 1 ? 'book' : 'books'}
-              </span>
+              <div className="flex items-baseline gap-3">
+                {books.length > 3 && (
+                  <input
+                    aria-label="Filter books"
+                    placeholder="Filter…"
+                    className="w-36 rounded-lg border border-line bg-inset px-2.5 py-1 text-[13px] outline-none placeholder:text-ink-faint focus:border-accent/60"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                  />
+                )}
+                <span className="text-[13px] text-ink-dim">
+                  {shown.length === books.length
+                    ? `${books.length} ${books.length === 1 ? 'book' : 'books'}`
+                    : `${shown.length} of ${books.length}`}
+                </span>
+              </div>
             </div>
             <div
               className="grid gap-x-[26px] gap-y-[34px]"
               style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))' }}
             >
-              {books.map((b) => {
+              {shown.map((b) => {
                 const p = progress[b.id]
                 const pct = p ? Math.round(p.percent * 100) : 0
                 const isEditing = editing === b.id

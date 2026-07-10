@@ -41,8 +41,11 @@ These are mutually exclusive on the same rendering. v1 is **recolor-only
 1. **No blur.** We never bake a low-res bitmap. `engine/pdf.ts` re-renders the
    page with pdf.js at `cssScale * devicePixelRatio` every time zoom changes, and
    `engine/recolor.ts` recolors that fresh render on the GPU. The reader sizes the
-   canvas so 1 backing pixel = 1 device pixel (fit-width × zoom). Text is always
-   vector-crisp; pdf.js's text layer keeps it selectable.
+   canvas so 1 backing pixel = 1 device pixel (fit-page × zoom). Text is always
+   vector-crisp. Note: no text layer is rendered, so page text is **not**
+   selectable today — `engine/search.ts` reads the same `getTextContent()` data
+   to search and to draw highlight boxes over the canvas. A real selectable text
+   layer is a separate (easy) milestone.
 2. **No inverted images.** Decided per page by `engine/pipeline.ts` (shared by
    the live reader and the export, so they can't drift):
    - **Polarity**: a page whose dominant tone is already dark (black cover,
@@ -90,6 +93,7 @@ src/
 │   ├── recolor.ts    Recolorizer: WebGL2 pass, source canvas -> recolored canvas
 │   ├── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
 │   ├── crop.ts       detectContentBox: doc-level margin box for auto-crop
+│   ├── search.ts     streaming full-text search + match rects (text layer data)
 │   └── pipeline.ts   renderDarkPage (+finishDarkPage for pre-rendered sources):
 │                     polarity, image masking, colour text — the per-page
 │                     decisions; shared by reader AND export

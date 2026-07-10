@@ -17,6 +17,13 @@ import {
 } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { detectContentBox } from '../engine/crop'
+import {
+  matchRectsOnPage,
+  searchBook,
+  type HighlightRect,
+  type SearchHit,
+  type TextCache,
+} from '../engine/search'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   getBook,
@@ -36,6 +43,9 @@ import {
 // Position + look are persisted per book, so reopening resumes exactly.
 
 const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
+
+/** Stable empty array so clearing highlights never triggers a needless render. */
+const NO_HIGHLIGHTS: HighlightRect[] = []
 
 interface ReaderProps {
   bookId: string
@@ -57,6 +67,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const prefetchRef = useRef<(CachedSource & { canvas: HTMLCanvasElement }) | null>(null)
   /** Classification is scale-independent; classify each page once per doc. */
   const clsCacheRef = useRef(new Map<string, PageClassification>())
+  /** Extracted page text, reused by search and highlighting. */
+  const textCacheRef = useRef<TextCache>(new Map())
   const docRef = useRef<PDFDocumentProxy | null>(null)
   const loadedIdRef = useRef<string | null>(null)
 
@@ -77,6 +89,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<SearchHit[]>([])
+  const [searching, setSearching] = useState(false)
+  const [scanned, setScanned] = useState(0)
+  /** The query whose matches are highlighted on the page (survives closing the panel). */
+  const [highlightQuery, setHighlightQuery] = useState('')
+  const [highlights, setHighlights] = useState<HighlightRect[]>([])
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
@@ -102,6 +122,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setToc([]) // don't show the previous book's contents while loading
     setCropBox(null)
     clsCacheRef.current.clear()
+    textCacheRef.current.clear()
+    setHighlightQuery('')
+    setHighlights([])
     prefetchRef.current = null
     sourceMetaRef.current = null
     void (async () => {
@@ -269,6 +292,20 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     canvas.style.height = `${result.source.height / result.dpr}px`
     canvas.style.transform = '' // clear any live pinch preview
 
+    // Search highlights are positioned against this exact render. NO_HIGHLIGHTS
+    // is a stable reference, so clearing twice doesn't re-render.
+    if (highlightQuery) {
+      try {
+        setHighlights(
+          await matchRectsOnPage(pdfPage, page, highlightQuery, textCacheRef.current, cssScale, crop),
+        )
+      } catch {
+        setHighlights(NO_HIGHLIGHTS)
+      }
+    } else {
+      setHighlights(NO_HIGHLIGHTS)
+    }
+
     // Keep the pinch focal point where the fingers ended: measure the freshly
     // laid-out canvas and scroll so the page point that was under the fingers
     // lands exactly where they were — exact regardless of centering or padding.
@@ -279,7 +316,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       scroller.scrollLeft += rect.left + commit.scale * commit.px - commit.mx
       scroller.scrollTop += rect.top + commit.scale * commit.py - commit.my
     }
-  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached])
+  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached, highlightQuery])
 
   // Pre-render the next page into the spare canvas while the current one is
   // read, so a forward turn is just a canvas swap + GPU recolor. Runs on the
@@ -484,19 +521,27 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // top (settings, contents) and finally returns to the library.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Cmd/Ctrl+F takes over the browser's find, which can't see a canvas anyway.
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowSearch(true)
+        return
+      }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return
       if (e.key === 'ArrowLeft') turn(-1)
       else if (e.key === 'ArrowRight') turn(1)
       else if (e.key === 'Escape') {
-        if (showSettings) setShowSettings(false)
+        if (showSearch) setShowSearch(false)
+        else if (showSettings) setShowSettings(false)
         else if (showToc) setShowToc(false)
+        else if (highlightQuery) setHighlightQuery('')
         else onShelf()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageCount, showSettings, showToc, onShelf])
+  }, [pageCount, showSettings, showToc, showSearch, highlightQuery, onShelf])
 
   // Keep the editable page field in sync when the page changes any other way.
   useEffect(() => {
@@ -508,6 +553,63 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const n = Number(v)
     if (Number.isInteger(n) && n >= 1 && n <= (pageCount || 1)) setPage(n)
   }
+
+  // --- search -----------------------------------------------------------------
+  // Debounced, streaming, and cancellable: results appear as pages are scanned,
+  // and a new keystroke aborts the previous scan rather than queueing behind it.
+  useEffect(() => {
+    if (!showSearch) return
+    const q = query.trim()
+    if (q.length < 2) {
+      setHits([])
+      setSearching(false)
+      return
+    }
+    const aborted = { value: false }
+    const timer = setTimeout(() => {
+      void (async () => {
+        const doc = docRef.current
+        if (!doc) return
+        setSearching(true)
+        setHits([])
+        setScanned(0)
+        const found: SearchHit[] = []
+        try {
+          for await (const hit of searchBook(doc, q, textCacheRef.current, {
+            fromPage: page,
+            aborted,
+            onProgress: (n) => !aborted.value && setScanned(n),
+          })) {
+            found.push(hit)
+            // Paint incrementally, but don't thrash React on every hit.
+            if (found.length <= 20 || found.length % 10 === 0) setHits([...found])
+          }
+        } finally {
+          if (!aborted.value) {
+            setHits([...found])
+            setSearching(false)
+          }
+        }
+      })()
+    }, 250)
+    return () => {
+      aborted.value = true
+      clearTimeout(timer)
+    }
+    // `page` is intentionally omitted: turning pages must not restart the search.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, showSearch, docVersion])
+
+  const openHit = useCallback((hit: SearchHit, q: string) => {
+    setHighlightQuery(q)
+    setPage(hit.page)
+    setShowSearch(false)
+  }, [])
+
+  const closeSearch = useCallback(() => {
+    setShowSearch(false)
+    setSearching(false)
+  }, [])
 
   const onExport = useCallback(async () => {
     const doc = docRef.current
@@ -554,6 +656,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
             {pageCount ? `${page} / ${pageCount}` : '—'}
           </span>
+          <button
+            aria-label="Search in book"
+            className="rounded-[10px] border px-2.5 py-1 text-sm opacity-80 transition-opacity hover:opacity-100"
+            style={{ borderColor: hairline }}
+            onClick={() => setShowSearch(true)}
+          >
+            ⌕
+          </button>
           <button
             aria-label="Reading settings"
             className="rounded-[10px] border px-3 py-1 font-serif text-sm opacity-80 transition-opacity hover:opacity-100"
@@ -606,7 +716,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         {/* m-auto centres the canvas when it fits and lets overflow-auto pan from
             the true left edge when zoomed (flex justify-center would clip it). */}
         <div className="flex min-h-full min-w-full p-2">
-          <canvas ref={canvasRef} className="m-auto rounded shadow-2xl" />
+          <div className="relative m-auto">
+            <canvas ref={canvasRef} className="block rounded shadow-2xl" />
+            {/* Search matches, drawn over the recolored page. Pointer-events off
+                so taps still turn pages through them. */}
+            {highlights.map((r, i) => (
+              <div
+                key={i}
+                className="pointer-events-none absolute rounded-[2px]"
+                style={{
+                  left: r.left,
+                  top: r.top,
+                  width: r.width,
+                  height: r.height,
+                  background: '#c9a56a',
+                  opacity: 0.28,
+                }}
+              />
+            ))}
+          </div>
         </div>
         {busy && (
           <div className="absolute inset-0 grid place-items-center font-serif italic opacity-60">
@@ -797,6 +925,72 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             )}
           </div>
         </>
+      )}
+
+      {showSearch && (
+        <div className="anim-fade absolute inset-0 z-30 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
+          <div className="mx-auto flex w-full max-w-xl items-center gap-3 px-5 py-4">
+            <input
+              aria-label="Search in book"
+              autoFocus
+              placeholder="Search this book…"
+              className="flex-1 rounded-lg border border-line bg-inset px-3 py-2 text-[15px] text-ink-body outline-none placeholder:text-ink-faint focus:border-accent/60"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && hits.length) openHit(hits[0], query)
+                else if (e.key === 'Escape') closeSearch()
+              }}
+            />
+            <button
+              aria-label="Close search"
+              className="h-9 w-9 flex-none rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
+              onClick={closeSearch}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="mx-auto w-full max-w-xl px-5 pb-2 text-xs text-ink-faint">
+            {query.trim().length < 2
+              ? 'Type at least two characters.'
+              : searching
+                ? `Searching… ${hits.length} ${hits.length === 1 ? 'match' : 'matches'} (${Math.round((scanned / (pageCount || 1)) * 100)}%)`
+                : hits.length
+                  ? `${hits.length} ${hits.length === 1 ? 'match' : 'matches'}`
+                  : 'No matches.'}
+            {highlightQuery && (
+              <button
+                className="ml-3 underline underline-offset-2 hover:text-ink-soft"
+                onClick={() => {
+                  setHighlightQuery('')
+                  closeSearch()
+                }}
+              >
+                Clear highlights
+              </button>
+            )}
+          </div>
+
+          <div className="mx-auto w-full max-w-xl flex-1 overflow-auto px-3 pb-8">
+            {hits.map((h, i) => (
+              <button
+                key={`${h.page}-${i}`}
+                className="block w-full rounded-lg px-3 py-2.5 text-left hover:bg-night-800"
+                onClick={() => openHit(h, query)}
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="truncate font-serif text-[15px] leading-snug text-ink-shelf">
+                    <span className="opacity-70">…{h.before}</span>
+                    <mark className="bg-accent/30 text-ink-bright">{h.match}</mark>
+                    <span className="opacity-70">{h.after}…</span>
+                  </span>
+                  <span className="flex-none text-xs tabular-nums text-ink-dim">p. {h.page}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {showToc && (
