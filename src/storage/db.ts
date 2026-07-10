@@ -29,6 +29,8 @@ export interface Profile {
   cropMargins?: boolean
   /** 'paged' (tap to turn, zoom, highlight) or 'scroll' (continuous flow). */
   viewMode?: 'paged' | 'scroll'
+  /** Show two pages side by side when the screen is landscape (paged mode). */
+  spread?: boolean
 }
 
 export interface Progress {

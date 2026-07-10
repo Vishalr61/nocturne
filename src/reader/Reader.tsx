@@ -28,6 +28,7 @@ import {
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
 import { ContinuousReader } from './ContinuousReader'
+import { SpreadReader } from './SpreadReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBookmark,
@@ -134,6 +135,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
   const [viewMode, setViewMode] = useState<'paged' | 'scroll'>('paged')
+  const [spread, setSpread] = useState(true)
+  const [landscape, setLandscape] = useState(
+    typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
+  )
   // The page number field edits as free text so typing "150" doesn't jump to
   // page 1 then 15; it commits whenever the text is a valid page.
   const [pageStr, setPageStr] = useState('1')
@@ -203,6 +208,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setZoom(profile.zoom)
         setCropMargins(profile.cropMargins ?? true)
         setViewMode(profile.viewMode ?? 'paged')
+        setSpread(profile.spread ?? true)
       }
       setPage(progress?.page ?? 1)
       setDocVersion((v) => v + 1)
@@ -238,11 +244,26 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     [docVersion],
   )
 
+  // Track orientation so the two-page spread turns on in landscape.
+  useEffect(() => {
+    const onResize = () => setLandscape(window.innerWidth > window.innerHeight)
+    window.addEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
+  }, [])
+
+  // The two-page spread replaces the single-page canvas only in paged mode, in
+  // landscape, with the setting on. Scroll mode is always single-column.
+  const spreadActive = viewMode === 'paged' && spread && landscape
+
   // --- render the current page ----------------------------------------------
   const draw = useCallback(async () => {
-    // Scroll mode owns its own rendering; the paged canvas stays hidden and
-    // must not re-render on every scroll-driven page change.
-    if (viewMode === 'scroll') return
+    // Scroll and spread each own their rendering; the single-page canvas stays
+    // hidden and must not re-render underneath them.
+    if (viewMode === 'scroll' || spreadActive) return
     const doc = docRef.current
     const canvas = canvasRef.current
     const scroller = containerRef.current
@@ -371,7 +392,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       scroller.scrollLeft += rect.left + commit.scale * commit.px - commit.mx
       scroller.scrollTop += rect.top + commit.scale * commit.py - commit.my
     }
-  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached, highlightQuery, viewMode])
+  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached, highlightQuery, viewMode, spreadActive])
 
   // Pre-render the next page into the spare canvas while the current one is
   // read, so a forward turn is just a canvas swap + GPU recolor. Runs on the
@@ -560,14 +581,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     const id = loadedIdRef.current
     if (!id) return
-    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins, viewMode })
+    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins, viewMode, spread })
     void saveProgress({
       bookId: id,
       page,
       percent: pageCount ? page / pageCount : 0,
       updatedAt: Date.now(),
     })
-  }, [themeId, imageDim, zoom, page, pageCount, cropMargins, viewMode])
+  }, [themeId, imageDim, zoom, page, pageCount, cropMargins, viewMode, spread])
 
   const turn = (delta: number) =>
     setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
@@ -805,7 +826,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           >
             {marked ? '★' : '☆'}
           </button>
-          {viewMode === 'paged' && (cls?.textChars ?? 0) > 0 && (
+          {viewMode === 'paged' && !spreadActive && (cls?.textChars ?? 0) > 0 && (
             <button
               aria-label={selectMode ? 'Leave select mode' : 'Select text'}
               title="Select text to copy or highlight"
@@ -840,9 +861,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         </header>
       )}
 
-      {viewMode === 'scroll' && (
+      {viewMode === 'scroll' && docVersion > 0 && docRef.current && (
         <ContinuousReader
-          doc={docRef.current!}
+          doc={docRef.current}
           pageCount={pageCount}
           theme={themeById(themeId)}
           satCut={SAT_CUT}
@@ -858,10 +879,31 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         />
       )}
 
+      {spreadActive && docVersion > 0 && docRef.current && (
+        <SpreadReader
+          doc={docRef.current}
+          pageCount={pageCount}
+          theme={themeById(themeId)}
+          satCut={SAT_CUT}
+          imageDim={imageDim}
+          crop={cropMargins ? cropBox : null}
+          page={page}
+          onPage={setPage}
+          onToggleChrome={() => setChrome((c) => !c)}
+          textCache={textCacheRef.current}
+          highlights={marks}
+          renderKey={`${docVersion}:${themeId}:${imageDim}:${cropMargins}:${cropBox ? 'c' : 'n'}`}
+        />
+      )}
+
       <div
         ref={containerRef}
         className="relative flex-1 overflow-auto"
-        style={{ touchAction: 'pan-x pan-y', display: viewMode === 'scroll' ? 'none' : undefined }}
+        style={{
+          touchAction: 'pan-x pan-y',
+          // Stay visible (showing "Loading…") until a replacement view can mount.
+          display: (viewMode === 'scroll' || spreadActive) && docVersion > 0 ? 'none' : undefined,
+        }}
       >
         {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
             Inert in select mode, where a drag means "select", not "turn". */}
@@ -1099,35 +1141,58 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 Scroll
               </button>
             </div>
-            <p className="mb-8 text-xs leading-relaxed text-ink-faint">
+            <p className="mb-6 text-xs leading-relaxed text-ink-faint">
               {viewMode === 'paged'
                 ? 'Tap the sides to turn pages. Pinch to zoom; select text to copy or highlight.'
                 : 'Flow through the whole book by scrolling. Text select and highlight-making live in Paged mode.'}
             </p>
 
-            <div className="mb-2.5 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Zoom</span>
-              <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
-            </div>
-            <div className="mb-7 flex items-center gap-3.5">
-              <span className="font-serif text-[13px] text-ink-soft">A</span>
-              <input
-                aria-label="Zoom"
-                type="range"
-                min={1}
-                max={4}
-                step={0.1}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="cozy-range flex-1"
-                style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
-              />
-              <span className="font-serif text-2xl text-ink-soft">A</span>
-            </div>
-            {viewMode === 'scroll' && (
-              <p className="-mt-5 mb-7 text-xs leading-relaxed text-ink-faint">
-                At 1× the whole page fits the screen; slide up to fill the width.
-              </p>
+            {viewMode === 'paged' && (
+              <label className="mb-8 flex cursor-pointer items-center justify-between">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Two-page spread{' '}
+                  <span className="lowercase tracking-normal text-ink-faint">(landscape)</span>
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-accent"
+                  checked={spread}
+                  onChange={(e) => setSpread(e.target.checked)}
+                />
+              </label>
+            )}
+
+            {/* Zoom is meaningless in the spread (pages are fit to the open
+                book), so it hides there. */}
+            {!spreadActive && (
+              <>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Zoom
+                  </span>
+                  <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+                </div>
+                <div className="mb-7 flex items-center gap-3.5">
+                  <span className="font-serif text-[13px] text-ink-soft">A</span>
+                  <input
+                    aria-label="Zoom"
+                    type="range"
+                    min={1}
+                    max={4}
+                    step={0.1}
+                    value={zoom}
+                    onChange={(e) => setZoom(Number(e.target.value))}
+                    className="cozy-range flex-1"
+                    style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+                  />
+                  <span className="font-serif text-2xl text-ink-soft">A</span>
+                </div>
+                {viewMode === 'scroll' && (
+                  <p className="-mt-5 mb-7 text-xs leading-relaxed text-ink-faint">
+                    At 1× the whole page fits the screen; slide up to fill the width.
+                  </p>
+                )}
+              </>
             )}
 
             <div className="mb-2.5 flex items-center justify-between">
