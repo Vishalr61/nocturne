@@ -15,8 +15,8 @@ export default defineConfig({
         name: 'Nocturne',
         short_name: 'Nocturne',
         description: 'Night-reading environment for PDFs you own.',
-        theme_color: '#000000',
-        background_color: '#000000',
+        theme_color: '#15110b',
+        background_color: '#15110b',
         display: 'standalone',
         orientation: 'portrait',
         icons: [

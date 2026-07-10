@@ -10,13 +10,27 @@ import {
 } from '../storage/db'
 import { importBook } from './import'
 
-// The shelf: every book you've added, with a recolored cover, how far you are,
-// and when you last read it. Tap to resume. Books live in this device's browser
-// storage; iCloud (via the Files picker) stays the master library.
+// The library: a place to resume, not a file manager. A "Reading now" hero
+// leads with the last book and one-tap Resume — the whole product exists for
+// download → keep reading — with a quiet cover grid below. Books live in this
+// device's browser storage; iCloud (via the Files picker) stays the master
+// library.
 
 interface ShelfProps {
   onOpen: (bookId: string) => void
 }
+
+/** Typographic cover fallback for books whose thumbnail hasn't rendered yet. */
+const COVER_GRADIENTS = [
+  'linear-gradient(160deg,#2a1c30,#1a1120)',
+  'linear-gradient(160deg,#2a2013,#170f08)',
+  'linear-gradient(160deg,#182a26,#0f1a17)',
+  'linear-gradient(160deg,#2b1a10,#180f08)',
+  'linear-gradient(160deg,#16281e,#0e1913)',
+  'linear-gradient(160deg,#20202a,#131319)',
+]
+const coverGradient = (id: string) =>
+  COVER_GRADIENTS[(id.charCodeAt(0) + id.charCodeAt(1)) % COVER_GRADIENTS.length]
 
 export function Shelf({ onOpen }: ShelfProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
@@ -61,81 +75,195 @@ export function Shelf({ onOpen }: ShelfProps) {
     [refresh],
   )
 
+  // "Reading now" = the book you touched most recently.
+  const hero =
+    books && books.length
+      ? [...books].sort((a, b) => lastTouched(b, progress) - lastTouched(a, progress))[0]
+      : null
+
+  const meta = (b: Book) => {
+    const p = progress[b.id]
+    if (!p) return 'Not started'
+    return `${Math.round(p.percent * 100)}% · p. ${p.page} of ${b.pageCount}`
+  }
+
   return (
-    <div className="flex h-full flex-col bg-night-950 text-neutral-200">
-      <header className="flex items-baseline gap-3 px-4 py-4">
-        <h1 className="text-lg font-semibold tracking-tight">Nocturne</h1>
-        <span className="text-sm text-neutral-500">Library</span>
-        <label className="ml-auto cursor-pointer rounded-md bg-night-700 px-3 py-1.5 text-sm hover:bg-night-800">
-          {busy ? 'Adding…' : 'Add book'}
-          <input
-            type="file"
-            accept="application/pdf"
-            className="hidden"
-            disabled={busy}
-            onChange={(e) => e.target.files?.[0] && void onAdd(e.target.files[0])}
+    <div className="flex h-full flex-col overflow-y-auto bg-night-950 font-sans text-ink-body">
+      <header className="sticky top-0 z-20 border-b border-night-800 bg-night-950/80 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
+          <div
+            className="h-[30px] w-[30px] flex-none rounded-[9px]"
+            style={{ background: 'radial-gradient(120% 120% at 30% 20%,#e0c088,#a97f3f)' }}
           />
-        </label>
+          <h1 className="font-serif text-xl font-semibold tracking-tight text-ink-bright">
+            Nocturne
+          </h1>
+          <span className="-ml-1 text-[13px] text-ink-soft">Library</span>
+          <div className="flex-1" />
+          {storage && <span className="hidden text-xs text-ink-faint sm:block">{storage}</span>}
+          <label className="cursor-pointer rounded-[11px] bg-accent px-4 py-2 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi">
+            {busy ? 'Adding…' : 'Add PDF'}
+            <input
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              disabled={busy}
+              onChange={(e) => e.target.files?.[0] && void onAdd(e.target.files[0])}
+            />
+          </label>
+        </div>
       </header>
 
-      <div className="flex-1 overflow-auto px-4 pb-8">
+      <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
         {books === null ? null : books.length === 0 ? (
-          <div className="mt-24 text-center text-neutral-500">
+          <div className="anim-rise mt-24 text-center text-ink-dim">
             <p className="text-4xl">🌙</p>
-            <p className="mt-4">No books yet.</p>
-            <p className="mt-1 text-sm">
-              Add a PDF — on iPhone the picker opens Files, so your iCloud Drive books are right there.
+            <p className="mt-5 font-serif text-xl text-ink-mid">No books yet.</p>
+            <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed">
+              Add a PDF — on iPhone the picker opens Files, so your iCloud Drive books are right
+              there.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {books.map((b) => {
-              const p = progress[b.id]
-              const pct = p ? Math.round(p.percent * 100) : 0
-              return (
-                <div key={b.id} className="group relative">
-                  <button
-                    className="block w-full overflow-hidden rounded-lg bg-night-800 text-left shadow-lg"
-                    onClick={() => onOpen(b.id)}
+          <>
+            {hero && (
+              <section className="anim-rise">
+                <div className="mb-4 text-[11px] uppercase tracking-[0.18em] text-ink-kicker">
+                  Reading now
+                </div>
+                <button
+                  className="flex w-full flex-wrap items-center rounded-[22px] border border-line text-left"
+                  style={{
+                    gap: 'clamp(22px,3vw,40px)',
+                    padding: 'clamp(20px,2.6vw,34px)',
+                    background: 'radial-gradient(130% 150% at 0% 0%,#241a0f,#160f08 70%)',
+                    boxShadow: '0 30px 60px -30px rgba(0,0,0,.8)',
+                  }}
+                  onClick={() => onOpen(hero.id)}
+                >
+                  <div
+                    className="aspect-[3/4] flex-none overflow-hidden rounded-xl"
+                    style={{
+                      width: 'clamp(110px,14vw,168px)',
+                      boxShadow: '0 22px 44px -16px rgba(0,0,0,.85)',
+                    }}
                   >
-                    {b.thumb ? (
-                      <img src={b.thumb} alt="" className="aspect-[3/4] w-full object-cover" />
+                    {hero.thumb ? (
+                      <img src={hero.thumb} alt="" className="h-full w-full object-cover" />
                     ) : (
-                      <div className="grid aspect-[3/4] w-full place-items-center text-3xl text-neutral-600">
-                        🌙
+                      <div
+                        className="flex h-full w-full flex-col justify-end p-4"
+                        style={{ background: coverGradient(hero.id) }}
+                      >
+                        <div className="font-serif text-lg font-medium leading-tight text-ink-shelf">
+                          {hero.title}
+                        </div>
                       </div>
                     )}
-                    <div className="p-2.5">
-                      <div className="truncate text-sm font-medium">{b.title}</div>
-                      <div className="mt-1 flex items-baseline justify-between text-xs text-neutral-500">
-                        <span>{p ? `${pct}% · p.${p.page}` : 'Not started'}</span>
-                        <span>{p ? relTime(p.updatedAt) : ''}</span>
-                      </div>
-                      {/* progress bar */}
-                      <div className="mt-2 h-0.5 w-full rounded bg-night-700">
-                        <div className="h-0.5 rounded bg-neutral-400" style={{ width: `${pct}%` }} />
-                      </div>
+                  </div>
+                  <div className="min-w-[min(260px,100%)] flex-1">
+                    <div
+                      className="font-serif leading-[1.08] tracking-tight text-ink-head"
+                      style={{ fontSize: 'clamp(26px,3.4vw,40px)' }}
+                    >
+                      {hero.title}
                     </div>
-                  </button>
-                  <button
-                    aria-label={`Remove ${b.title}`}
-                    className="absolute right-1.5 top-1.5 rounded-full bg-black/60 px-2 py-0.5 text-xs text-neutral-300 opacity-70 hover:opacity-100"
-                    onClick={() => void onDelete(b)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+                    <div className="mt-2 text-[15px] text-ink-mid">
+                      {hero.pageCount} pages · added {relTime(hero.addedAt)}
+                    </div>
+                    <div className="mt-6 flex max-w-[440px] items-center gap-4">
+                      <div className="h-1 flex-1 overflow-hidden rounded bg-line">
+                        <div
+                          className="h-full"
+                          style={{
+                            width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%`,
+                            background: 'linear-gradient(90deg,#c9a56a,#e6c68c)',
+                          }}
+                        />
+                      </div>
+                      <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-mid">
+                        {meta(hero)}
+                      </span>
+                    </div>
+                    <div className="mt-6">
+                      <span className="inline-block rounded-xl bg-accent px-6 py-2.5 text-sm font-semibold text-accent-on">
+                        Resume reading
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              </section>
+            )}
+
+            <div className="mb-5 mt-12 flex items-baseline justify-between">
+              <h2 className="font-serif text-[22px] text-ink-head">Your shelf</h2>
+              <span className="text-[13px] text-ink-dim">
+                {books.length} {books.length === 1 ? 'book' : 'books'}
+              </span>
+            </div>
+            <div
+              className="grid gap-x-[26px] gap-y-[34px]"
+              style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))' }}
+            >
+              {books.map((b) => {
+                const p = progress[b.id]
+                const pct = p ? Math.round(p.percent * 100) : 0
+                return (
+                  <div key={b.id} className="anim-rise group relative">
+                    <button className="block w-full text-left" onClick={() => onOpen(b.id)}>
+                      <div
+                        className="relative aspect-[3/4] overflow-hidden rounded-[13px] bg-night-800 ring-1 ring-white/5"
+                        style={{ boxShadow: '0 18px 36px -16px rgba(0,0,0,.8)' }}
+                      >
+                        {b.thumb ? (
+                          <img src={b.thumb} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div
+                            className="flex h-full w-full flex-col justify-end p-4"
+                            style={{ background: coverGradient(b.id) }}
+                          >
+                            <div className="font-serif text-[17px] font-medium leading-tight text-ink-shelf">
+                              {b.title}
+                            </div>
+                          </div>
+                        )}
+                        {/* progress strip along the cover's bottom edge */}
+                        <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/30">
+                          <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                      <div className="mt-3 truncate font-serif text-[15px] leading-tight text-ink-shelf">
+                        {b.title}
+                      </div>
+                      <div className="mt-1 flex items-baseline justify-between text-xs tabular-nums text-ink-dim">
+                        <span className="truncate">{p ? `${pct}% · p. ${p.page}` : 'Not started'}</span>
+                        <span className="ml-2 flex-none">{p ? relTime(p.updatedAt) : ''}</span>
+                      </div>
+                    </button>
+                    <button
+                      aria-label={`Remove ${b.title}`}
+                      className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-ink-body opacity-60 transition-opacity hover:opacity-100"
+                      onClick={() => void onDelete(b)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </>
         )}
-      </div>
+      </main>
 
       {storage && (
-        <footer className="px-4 pb-3 text-center text-xs text-neutral-600">{storage}</footer>
+        <footer className="px-4 pb-4 text-center text-xs text-ink-faint sm:hidden">{storage}</footer>
       )}
     </div>
   )
+}
+
+function lastTouched(b: Book, progress: ProgressByBook): number {
+  return Math.max(progress[b.id]?.updatedAt ?? 0, b.lastOpenedAt ?? 0, b.addedAt)
 }
 
 function fmtBytes(n: number): string {

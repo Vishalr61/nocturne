@@ -7,11 +7,84 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #050506;
+  background: #15110b;
   overscroll-behavior: none;
 }
 
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: #e6d6bf;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Entrance/slide animations from the cozy design language. */
+@keyframes czFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes czRise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes czPanel {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+.anim-fade { animation: czFade 0.25s ease both; }
+.anim-rise { animation: czRise 0.4s ease both; }
+.anim-panel { animation: czPanel 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Thin gold sliders: a 3px track with the filled portion in the accent.
+   The fill percentage comes in via the --fill custom property. */
+.cozy-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px; /* generous hit target; the visible track is 3px */
+  background: transparent;
+  cursor: pointer;
+}
+.cozy-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #c9a56a var(--fill, 0%), #2b201380 var(--fill, 0%));
+}
+.cozy-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c9a56a;
+  border: none;
+  margin-top: -5.5px;
+}
+.cozy-range::-moz-range-track {
+  height: 3px;
+  border-radius: 3px;
+  background: #2b201380;
+}
+.cozy-range::-moz-range-progress {
+  height: 3px;
+  border-radius: 3px;
+  background: #c9a56a;
+}
+.cozy-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c9a56a;
+  border: none;
+}
+
+/* Warm scrollbars (desktop). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2c2213;
+  border-radius: 8px;
+  border: 3px solid #15110b;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }

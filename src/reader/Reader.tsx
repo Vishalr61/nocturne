@@ -76,6 +76,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
@@ -479,6 +480,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const turn = (delta: number) =>
     setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
 
+  // Real keyboard nav on desktop: ←/→ turn pages; Esc closes whatever is on
+  // top (settings, contents) and finally returns to the library.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return
+      if (e.key === 'ArrowLeft') turn(-1)
+      else if (e.key === 'ArrowRight') turn(1)
+      else if (e.key === 'Escape') {
+        if (showSettings) setShowSettings(false)
+        else if (showToc) setShowToc(false)
+        else onShelf()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageCount, showSettings, showToc, onShelf])
+
   // Keep the editable page field in sync when the page changes any other way.
   useEffect(() => {
     setPageStr(String(page))
@@ -506,17 +525,43 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [themeId, title])
 
+  // The reader's chrome follows the reading theme, so the page and its frame
+  // are one calm surface instead of a dark app around a differently-dark page.
+  const theme = themeById(themeId)
+  const chromeBg = rgbCss(theme.bg)
+  const hairline = 'color-mix(in srgb, currentColor 14%, transparent)'
+  const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
+
   return (
-    <div className="relative flex h-full flex-col bg-night-950 text-neutral-200">
+    <div
+      className="anim-fade relative flex h-full flex-col font-sans"
+      style={{ background: chromeBg, color: rgbCss(theme.fg) }}
+    >
       {chrome && (
-        <header className="flex items-center gap-3 px-4 py-3 text-sm">
+        <header
+          className="z-20 flex items-center gap-3 px-4 py-3 text-sm"
+          style={{ borderBottom: `1px solid ${hairline}` }}
+        >
           <button
-            className="rounded-md bg-night-700 px-3 py-1.5 text-neutral-200 hover:bg-night-800"
+            className="flex items-center gap-1 whitespace-nowrap opacity-70 transition-opacity hover:opacity-100"
             onClick={onShelf}
           >
             ‹ Library
           </button>
-          <span className="truncate text-neutral-400">{title}</span>
+          <div className="min-w-0 flex-1 text-center">
+            <span className="block truncate font-serif text-sm italic opacity-60">{title}</span>
+          </div>
+          <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
+            {pageCount ? `${page} / ${pageCount}` : '—'}
+          </span>
+          <button
+            aria-label="Reading settings"
+            className="rounded-[10px] border px-3 py-1 font-serif text-sm opacity-80 transition-opacity hover:opacity-100"
+            style={{ borderColor: hairline }}
+            onClick={() => setShowSettings(true)}
+          >
+            Aa
+          </button>
         </header>
       )}
 
@@ -541,36 +586,53 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           className="absolute inset-y-0 right-0 z-10 w-1/3"
           onClick={() => turn(1)}
         />
+        {/* quiet edge chevrons: a desktop affordance for the tap zones */}
+        {chrome && (
+          <>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 select-none text-2xl opacity-20 sm:block"
+            >
+              ‹
+            </div>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute right-2 top-1/2 z-10 hidden -translate-y-1/2 select-none text-2xl opacity-20 sm:block"
+            >
+              ›
+            </div>
+          </>
+        )}
         {/* m-auto centres the canvas when it fits and lets overflow-auto pan from
             the true left edge when zoomed (flex justify-center would clip it). */}
         <div className="flex min-h-full min-w-full p-2">
           <canvas ref={canvasRef} className="m-auto rounded shadow-2xl" />
         </div>
         {busy && (
-          <div className="absolute inset-0 grid place-items-center text-neutral-400">Loading…</div>
+          <div className="absolute inset-0 grid place-items-center font-serif italic opacity-60">
+            Loading…
+          </div>
         )}
       </div>
 
       {chrome && (
-        <footer className="flex flex-wrap items-center gap-3 border-t border-night-800 px-4 py-3 text-sm">
-          <div className="flex items-center gap-2">
-            <button className="rounded bg-night-700 px-2 py-1" onClick={() => turn(-1)}>
-              ‹
-            </button>
-            <input
-              aria-label="Page number"
-              type="text"
-              inputMode="numeric"
-              className="w-12 rounded bg-night-700 px-1 py-1 text-center tabular-nums"
-              value={pageStr}
-              onChange={(e) => onPageInput(e.target.value)}
-              onBlur={() => setPageStr(String(page))}
-            />
-            <span className="tabular-nums text-neutral-500">/ {pageCount || '—'}</span>
-            <button className="rounded bg-night-700 px-2 py-1" onClick={() => turn(1)}>
-              ›
-            </button>
-          </div>
+        <footer
+          className="z-20 flex items-center gap-3 px-4 py-2.5"
+          style={{ borderTop: `1px solid ${hairline}` }}
+        >
+          <input
+            aria-label="Page number"
+            type="text"
+            inputMode="numeric"
+            className="w-11 rounded-lg border bg-transparent px-1 py-1 text-center text-[13px] tabular-nums"
+            style={{ borderColor: hairline }}
+            value={pageStr}
+            onChange={(e) => onPageInput(e.target.value)}
+            onBlur={() => setPageStr(String(page))}
+          />
+          <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
+            / {pageCount || '—'}
+          </span>
 
           {pageCount > 1 && (
             <input
@@ -581,102 +643,187 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               step={1}
               value={page}
               onChange={(e) => setPage(Number(e.target.value))}
-              className="min-w-[120px] flex-1"
+              className="cozy-range min-w-[100px] flex-1"
+              style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
             />
           )}
 
+          <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
+            {pageCount ? `${Math.round((page / pageCount) * 100)}%` : ''}
+          </span>
+
           {toc.length > 0 && (
             <button
-              className="rounded bg-night-700 px-3 py-1 text-neutral-200 hover:bg-night-800"
+              className="whitespace-nowrap text-[13px] opacity-70 transition-opacity hover:opacity-100"
               onClick={() => setShowToc(true)}
             >
               Contents
             </button>
           )}
+        </footer>
+      )}
 
-          <select
-            className="rounded bg-night-700 px-2 py-1"
-            value={themeId}
-            onChange={(e) => setThemeId(e.target.value)}
-          >
-            {THEMES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+      {/* Reading settings: a focused drawer, not a toolbar. Everything that
+          shapes the page lives here, surfaced only when you want it. */}
+      {showSettings && (
+        <>
+          <div
+            className="anim-fade fixed inset-0 z-30 bg-black/45"
+            onClick={() => setShowSettings(false)}
+          />
+          <div className="anim-panel fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line bg-panel p-6 pb-10 font-sans text-ink-body">
+            <div className="mb-7 flex items-center justify-between">
+              <div className="font-serif text-xl text-ink-bright">Reading settings</div>
+              <button
+                aria-label="Close settings"
+                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                onClick={() => setShowSettings(false)}
+              >
+                ✕
+              </button>
+            </div>
 
-          <label className="flex items-center gap-2 text-neutral-400">
-            Images
+            <div className="mb-3.5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+              Theme
+            </div>
+            <div className="mb-8 grid grid-cols-2 gap-3">
+              {THEMES.map((t) => (
+                <button key={t.id} className="text-left" onClick={() => setThemeId(t.id)}>
+                  <div
+                    className="flex h-16 items-center rounded-xl px-4"
+                    style={{
+                      background: rgbCss(t.bg),
+                      border: `2px solid ${t.id === themeId ? '#c9a56a' : '#2c2113'}`,
+                    }}
+                  >
+                    <span className="font-serif text-xl" style={{ color: rgbCss(t.fg) }}>
+                      Aa
+                    </span>
+                  </div>
+                  <div
+                    className="mt-1.5 text-[11px]"
+                    style={{ color: t.id === themeId ? '#c9a56a' : '#9a875f' }}
+                  >
+                    {t.name}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+              Reading mode
+            </div>
+            <div className="mb-2.5 flex rounded-xl bg-inset p-1">
+              <button className="flex-1 rounded-[9px] bg-accent py-2.5 text-[13px] font-semibold text-accent-on">
+                Faithful
+              </button>
+              <button
+                disabled
+                title="Coming soon"
+                className="flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold text-ink-faint"
+              >
+                Text Mode
+              </button>
+            </div>
+            <p className="mb-8 text-xs leading-relaxed text-ink-faint">
+              Faithful keeps the exact page — crisp text, images intact. Text Mode (reflow, with
+              your font and spacing) is coming.
+            </p>
+
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Zoom</span>
+              <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+            </div>
+            <div className="mb-7 flex items-center gap-3.5">
+              <span className="font-serif text-[13px] text-ink-soft">A</span>
+              <input
+                aria-label="Zoom"
+                type="range"
+                min={1}
+                max={4}
+                step={0.1}
+                value={zoom}
+                onChange={(e) => setZoom(Number(e.target.value))}
+                className="cozy-range flex-1"
+                style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+              />
+              <span className="font-serif text-2xl text-ink-soft">A</span>
+            </div>
+
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                Image brightness
+              </span>
+              <span className="text-xs tabular-nums text-ink-soft">
+                {Math.round(imageDim * 100)}%
+              </span>
+            </div>
             <input
+              aria-label="Images"
               type="range"
               min={0.4}
               max={1}
               step={0.02}
               value={imageDim}
               onChange={(e) => setImageDim(Number(e.target.value))}
+              className="cozy-range mb-7 w-full"
+              style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
             />
-          </label>
 
-          {cropBox && (
-            <label className="flex items-center gap-1.5 text-neutral-400">
-              <input
-                type="checkbox"
-                checked={cropMargins}
-                onChange={(e) => setCropMargins(e.target.checked)}
-              />
-              Crop
-            </label>
-          )}
+            {cropBox && (
+              <label className="mb-7 flex cursor-pointer items-center justify-between">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Crop margins
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-accent"
+                  checked={cropMargins}
+                  onChange={(e) => setCropMargins(e.target.checked)}
+                />
+              </label>
+            )}
 
-          <label className="flex items-center gap-2 text-neutral-400">
-            Zoom
-            <input
-              type="range"
-              min={1}
-              max={4}
-              step={0.1}
-              value={zoom}
-              onChange={(e) => setZoom(Number(e.target.value))}
-            />
-          </label>
+            <button
+              className="w-full rounded-xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+              disabled={!pageCount || exporting !== null}
+              onClick={onExport}
+            >
+              {exporting !== null ? `Exporting ${Math.round(exporting * 100)}%` : 'Export dark PDF'}
+            </button>
 
-          <button
-            className="rounded bg-night-700 px-3 py-1 text-neutral-200 hover:bg-night-800 disabled:opacity-50"
-            disabled={!pageCount || exporting !== null}
-            onClick={onExport}
-          >
-            {exporting !== null ? `Exporting ${Math.round(exporting * 100)}%` : 'Export dark PDF'}
-          </button>
-
-          {cls && <span className="ml-auto text-xs text-neutral-600">page: {cls.kind}</span>}
-        </footer>
+            {cls && (
+              <div className="mt-6 text-center text-[11px] text-ink-faint">page: {cls.kind}</div>
+            )}
+          </div>
+        </>
       )}
 
       {showToc && (
-        <div className="absolute inset-0 z-20 flex flex-col bg-night-950/95">
-          <div className="flex items-center justify-between px-4 py-3">
-            <span className="text-sm font-medium">Contents</span>
+        <div className="anim-fade absolute inset-0 z-20 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
+          <div className="flex items-center justify-between px-5 py-4">
+            <span className="font-serif text-lg text-ink-bright">Contents</span>
             <button
-              className="rounded bg-night-700 px-3 py-1 text-sm"
+              aria-label="Close contents"
+              className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
               onClick={() => setShowToc(false)}
             >
-              Close
+              ✕
             </button>
           </div>
-          <div className="flex-1 overflow-auto px-2 pb-6">
+          <div className="mx-auto w-full max-w-xl flex-1 overflow-auto px-3 pb-8">
             {toc.map((t, i) => (
               <button
                 key={i}
-                className="flex w-full items-baseline justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-night-800"
-                style={{ paddingLeft: `${8 + t.depth * 16}px` }}
+                className="flex w-full items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
+                style={{ paddingLeft: `${12 + t.depth * 16}px` }}
                 onClick={() => {
                   setPage(t.page)
                   setShowToc(false)
                 }}
               >
-                <span className="truncate">{t.title}</span>
-                <span className="tabular-nums text-neutral-500">{t.page}</span>
+                <span className="truncate font-serif text-[15px] text-ink-shelf">{t.title}</span>
+                <span className="text-sm tabular-nums text-ink-dim">{t.page}</span>
               </button>
             ))}
           </div>
@@ -684,6 +831,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       )}
     </div>
   )
+}
+
+/** Theme anchor tone (0..1 triple) → CSS colour for the reader chrome. */
+function rgbCss(c: [number, number, number]): string {
+  return `rgb(${Math.round(c[0] * 255)} ${Math.round(c[1] * 255)} ${Math.round(c[2] * 255)})`
 }
 
 interface TocItem {
