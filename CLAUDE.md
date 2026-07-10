@@ -108,8 +108,12 @@ src/
 ├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress, bookmarks,
 │                     pendingTitles + backup/restore. Local only.
 ├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
-└── reader/Reader.tsx recolor, tap zones, pinch zoom, nav (scrubber/TOC),
-                      next-page prefetch, margin crop; persists per book
+└── reader/
+    ├── Reader.tsx    paged reader: recolor, tap zones, pinch zoom, nav
+    │                 (scrubber/TOC), prefetch, crop, search, bookmarks; owns
+    │                 book load + persistence for BOTH view modes
+    ├── TextLayer.tsx transparent selectable spans → copy + highlights (paged)
+    └── ContinuousReader.tsx  virtualized scroll layout (opt-in "Scroll" mode)
 ```
 
 ## Roadmap (build order)
@@ -133,7 +137,10 @@ src/
    copy. Off by default ("T" toggles select mode) so taps still turn pages.
    Highlights persist as character RANGES, never pixel rects, so they survive
    zoom/crop/other screens.
-8. Continuous scroll + landscape two-page spread.
+8. ✅ Continuous scroll (`reader/ContinuousReader.tsx`): opt-in "Scroll" layout,
+   virtualized (bounded canvases), one shared GL context blitted per page.
+   Paged mode stays the default and is untouched. Landscape two-page spread
+   still pending.
 9. **Text Mode** (reflow) for font/size/spacing on prose.
 10. Vector export (rewrite colour operators; selectable text in the export).
 11. Scanned-PDF OCR path.

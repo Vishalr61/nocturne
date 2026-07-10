@@ -27,6 +27,8 @@ export interface Profile {
   imageDim?: number
   /** Crop the document's shared page margins so content fills the screen. */
   cropMargins?: boolean
+  /** 'paged' (tap to turn, zoom, highlight) or 'scroll' (continuous flow). */
+  viewMode?: 'paged' | 'scroll'
 }
 
 export interface Progress {

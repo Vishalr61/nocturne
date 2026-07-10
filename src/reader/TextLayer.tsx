@@ -134,8 +134,6 @@ export function TextLayer({
       ref={rootRef}
       aria-hidden={!active}
       data-text-layer
-      data-page-no={pageNo}
-      data-proxy-no={page.pageNumber}
       className="absolute inset-0 z-20 select-text"
       style={{
         pointerEvents: active ? 'auto' : 'none',

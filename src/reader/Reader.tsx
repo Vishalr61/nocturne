@@ -27,6 +27,7 @@ import {
   type TextCache,
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
+import { ContinuousReader } from './ContinuousReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBookmark,
@@ -132,6 +133,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
+  const [viewMode, setViewMode] = useState<'paged' | 'scroll'>('paged')
   // The page number field edits as free text so typing "150" doesn't jump to
   // page 1 then 15; it commits whenever the text is a valid page.
   const [pageStr, setPageStr] = useState('1')
@@ -200,6 +202,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setImageDim(profile.imageDim ?? 0.82)
         setZoom(profile.zoom)
         setCropMargins(profile.cropMargins ?? true)
+        setViewMode(profile.viewMode ?? 'paged')
       }
       setPage(progress?.page ?? 1)
       setDocVersion((v) => v + 1)
@@ -237,6 +240,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
   // --- render the current page ----------------------------------------------
   const draw = useCallback(async () => {
+    // Scroll mode owns its own rendering; the paged canvas stays hidden and
+    // must not re-render on every scroll-driven page change.
+    if (viewMode === 'scroll') return
     const doc = docRef.current
     const canvas = canvasRef.current
     const scroller = containerRef.current
@@ -365,7 +371,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       scroller.scrollLeft += rect.left + commit.scale * commit.px - commit.mx
       scroller.scrollTop += rect.top + commit.scale * commit.py - commit.my
     }
-  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached, highlightQuery])
+  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached, highlightQuery, viewMode])
 
   // Pre-render the next page into the spare canvas while the current one is
   // read, so a forward turn is just a canvas swap + GPU recolor. Runs on the
@@ -554,14 +560,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     const id = loadedIdRef.current
     if (!id) return
-    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins })
+    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins, viewMode })
     void saveProgress({
       bookId: id,
       page,
       percent: pageCount ? page / pageCount : 0,
       updatedAt: Date.now(),
     })
-  }, [themeId, imageDim, zoom, page, pageCount, cropMargins])
+  }, [themeId, imageDim, zoom, page, pageCount, cropMargins, viewMode])
 
   const turn = (delta: number) =>
     setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
@@ -799,7 +805,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           >
             {marked ? '★' : '☆'}
           </button>
-          {(cls?.textChars ?? 0) > 0 && (
+          {viewMode === 'paged' && (cls?.textChars ?? 0) > 0 && (
             <button
               aria-label={selectMode ? 'Leave select mode' : 'Select text'}
               title="Select text to copy or highlight"
@@ -834,10 +840,27 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         </header>
       )}
 
+      {viewMode === 'scroll' && (
+        <ContinuousReader
+          doc={docRef.current!}
+          pageCount={pageCount}
+          theme={themeById(themeId)}
+          satCut={SAT_CUT}
+          imageDim={imageDim}
+          crop={cropMargins ? cropBox : null}
+          page={page}
+          onPage={setPage}
+          onToggleChrome={() => setChrome((c) => !c)}
+          textCache={textCacheRef.current}
+          highlights={marks}
+          renderKey={`${docVersion}:${themeId}:${imageDim}:${cropMargins}:${cropBox ? 'c' : 'n'}`}
+        />
+      )}
+
       <div
         ref={containerRef}
         className="relative flex-1 overflow-auto"
-        style={{ touchAction: 'pan-x pan-y' }}
+        style={{ touchAction: 'pan-x pan-y', display: viewMode === 'scroll' ? 'none' : undefined }}
       >
         {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
             Inert in select mode, where a drag means "select", not "turn". */}
@@ -1055,44 +1078,57 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </div>
 
             <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-              Reading mode
+              Layout
             </div>
             <div className="mb-2.5 flex rounded-xl bg-inset p-1">
-              <button className="flex-1 rounded-[9px] bg-accent py-2.5 text-[13px] font-semibold text-accent-on">
-                Faithful
+              <button
+                className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold ${
+                  viewMode === 'paged' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                }`}
+                onClick={() => setViewMode('paged')}
+              >
+                Paged
               </button>
               <button
-                disabled
-                title="Coming soon"
-                className="flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold text-ink-faint"
+                className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold ${
+                  viewMode === 'scroll' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                }`}
+                onClick={() => setViewMode('scroll')}
               >
-                Text Mode
+                Scroll
               </button>
             </div>
             <p className="mb-8 text-xs leading-relaxed text-ink-faint">
-              Faithful keeps the exact page — crisp text, images intact. Text Mode (reflow, with
-              your font and spacing) is coming.
+              {viewMode === 'paged'
+                ? 'Tap the sides to turn pages. Pinch to zoom; select text to copy or highlight.'
+                : 'Flow through the whole book by scrolling. Zoom, text select and highlight-making live in Paged mode.'}
             </p>
 
-            <div className="mb-2.5 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Zoom</span>
-              <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
-            </div>
-            <div className="mb-7 flex items-center gap-3.5">
-              <span className="font-serif text-[13px] text-ink-soft">A</span>
-              <input
-                aria-label="Zoom"
-                type="range"
-                min={1}
-                max={4}
-                step={0.1}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="cozy-range flex-1"
-                style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
-              />
-              <span className="font-serif text-2xl text-ink-soft">A</span>
-            </div>
+            {viewMode === 'paged' && (
+              <>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Zoom
+                  </span>
+                  <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+                </div>
+                <div className="mb-7 flex items-center gap-3.5">
+                  <span className="font-serif text-[13px] text-ink-soft">A</span>
+                  <input
+                    aria-label="Zoom"
+                    type="range"
+                    min={1}
+                    max={4}
+                    step={0.1}
+                    value={zoom}
+                    onChange={(e) => setZoom(Number(e.target.value))}
+                    className="cozy-range flex-1"
+                    style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+                  />
+                  <span className="font-serif text-2xl text-ink-soft">A</span>
+                </div>
+              </>
+            )}
 
             <div className="mb-2.5 flex items-center justify-between">
               <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
