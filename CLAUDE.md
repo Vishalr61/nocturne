@@ -111,6 +111,34 @@ src/
 6. Vector export (rewrite colour operators; selectable text in the export).
 7. Scanned-PDF OCR path.
 
+## Deployment
+
+Production: **https://nocturne-ten-weld.vercel.app** — Vercel project `nocturne`
+connected to GitHub `Vishalr61/nocturne`. **Pushing to `main` auto-deploys.**
+Nothing to configure locally; verify after a push by curling the site.
+
+## How to verify changes (no test suite — verify visually)
+
+Rendering work is validated by driving the real app in headless Chromium and
+reading screenshots. The setup that works on this machine:
+
+- Python Playwright (`/opt/homebrew/opt/python@3.12/bin/python3.12`); pass
+  `executable_path=~/Library/Caches/ms-playwright/chromium_headless_shell-1228/…/chrome-headless-shell`
+  to `chromium.launch()` (the default browser download is absent). WebGL2 works.
+- Emulate a phone: viewport 390×844, `device_scale_factor=3`; add
+  `has_touch=True` for gesture tests (pinch via CDP `Input.dispatchTouchEvent`).
+- Load a book with `page.set_input_files("input[type=file]", pdf)`; a page has
+  finished rendering when the footer text contains `page:` (the classification
+  label). Set the React range sliders via the native value setter + an `input`
+  event, not `fill()`.
+- Ground-truth page renders and test-PDF assembly: PyMuPDF in
+  `~/patchpdf/backend/.venv/bin/python`.
+- Good test books: `~/Documents/Hobby/Books/Red Rising/red-rising.pdf` (dark
+  cover, blue TOC links, greyscale map), `~/Documents/CompTIA/SybexCompTIA.pdf`
+  (colour cover, greyscale photos, full-page bitmaps + text layer),
+  `~/Documents/Hobby/Books/enders_game_-_full_novel.pdf` (pure prose — must
+  never regress).
+
 ## Guardrails for agents
 
 - **Read the source first.** It is ground truth. Verify claims against the code.
