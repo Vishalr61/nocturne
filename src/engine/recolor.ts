@@ -8,14 +8,23 @@ import type { Theme } from './theme'
 
 export interface RecolorOptions {
   theme: Theme
-  satCut?: number // saturation threshold for "this is a colour image, leave it"
+  satCut?: number // saturation threshold for "this is colour content"
   strength?: number // 0..1 blend of the effect
+  /** false = the page is already dark; pass it through untouched. */
+  inkFlip?: boolean
+  /** true = page has no images; luma-shift saturated pixels (readable links). */
+  colorText?: boolean
+  /** Low-res mask canvas: white inside declared image rects to preserve. */
+  mask?: HTMLCanvasElement | null
+  /** Brightness applied to preserved (masked) images to cut glare. */
+  imageDim?: number
 }
 
 export class Recolorizer {
   private gl: WebGL2RenderingContext
   private program: WebGLProgram
   private tex: WebGLTexture
+  private maskTex: WebGLTexture
   private u: Record<string, WebGLUniformLocation | null>
 
   // `preserveDrawingBuffer` must be true for the offscreen export path, where we
@@ -36,19 +45,23 @@ export class Recolorizer {
     gl.enableVertexAttribArray(loc)
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
 
-    this.tex = gl.createTexture()!
-    gl.bindTexture(gl.TEXTURE_2D, this.tex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    this.tex = makeTexture(gl)
+    this.maskTex = makeTexture(gl)
+    // Default 1x1 black mask = "preserve nothing" when no mask is supplied.
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
 
     this.u = {
       uTex: gl.getUniformLocation(this.program, 'uTex'),
+      uMask: gl.getUniformLocation(this.program, 'uMask'),
       uBg: gl.getUniformLocation(this.program, 'uBg'),
       uFg: gl.getUniformLocation(this.program, 'uFg'),
       uSatCut: gl.getUniformLocation(this.program, 'uSatCut'),
       uStrength: gl.getUniformLocation(this.program, 'uStrength'),
+      uInkFlip: gl.getUniformLocation(this.program, 'uInkFlip'),
+      uColorText: gl.getUniformLocation(this.program, 'uColorText'),
+      uHasMask: gl.getUniformLocation(this.program, 'uHasMask'),
+      uImageDim: gl.getUniformLocation(this.program, 'uImageDim'),
     }
   }
 
@@ -65,11 +78,24 @@ export class Recolorizer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
 
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex)
+    if (opts.mask) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, opts.mask)
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
+    }
+
     gl.uniform1i(this.u.uTex, 0)
+    gl.uniform1i(this.u.uMask, 1)
     gl.uniform3fv(this.u.uBg, opts.theme.bg)
     gl.uniform3fv(this.u.uFg, opts.theme.fg)
     gl.uniform1f(this.u.uSatCut, opts.satCut ?? 0.25)
     gl.uniform1f(this.u.uStrength, opts.strength ?? 1)
+    gl.uniform1f(this.u.uInkFlip, (opts.inkFlip ?? true) ? 1 : 0)
+    gl.uniform1f(this.u.uColorText, opts.colorText ? 1 : 0)
+    gl.uniform1f(this.u.uHasMask, opts.mask ? 1 : 0)
+    gl.uniform1f(this.u.uImageDim, opts.imageDim ?? 1)
 
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
@@ -77,8 +103,19 @@ export class Recolorizer {
   dispose() {
     const gl = this.gl
     gl.deleteTexture(this.tex)
+    gl.deleteTexture(this.maskTex)
     gl.deleteProgram(this.program)
   }
+}
+
+function makeTexture(gl: WebGL2RenderingContext): WebGLTexture {
+  const t = gl.createTexture()!
+  gl.bindTexture(gl.TEXTURE_2D, t)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  return t
 }
 
 function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {

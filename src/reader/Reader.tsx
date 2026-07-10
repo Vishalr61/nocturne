@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { openPdf, renderPageToCanvas, type PDFDocumentProxy } from '../engine/pdf'
+import { openPdf, type PDFDocumentProxy } from '../engine/pdf'
 import { Recolorizer } from '../engine/recolor'
 import { THEMES, themeById, DEFAULT_THEME } from '../engine/theme'
-import { classifyPage, type PageClassification } from '../engine/classify'
+import { renderDarkPage } from '../engine/pipeline'
+import type { PageClassification } from '../engine/classify'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBook,
@@ -56,15 +57,16 @@ export function Reader() {
       : pageWidth
     const cssScale = Math.max(0.1, containerWidth / pageWidth) * zoom
 
-    const [source, classification] = await Promise.all([
-      renderPageToCanvas(pdfPage, cssScale, dpr),
-      classifyPage(pdfPage),
-    ])
+    // The pipeline decides polarity, image masking, and colour-text handling
+    // per page, then draws the recolored result into our canvas.
+    const { source, cls: classification } = await renderDarkPage(
+      pdfPage,
+      cssScale,
+      dpr,
+      recolorRef.current,
+      { theme: themeById(themeId), satCut },
+    )
     setCls(classification)
-    recolorRef.current.render(source, source.width, source.height, {
-      theme: themeById(themeId),
-      satCut,
-    })
     // Display exactly at render resolution; when zoom > 1 the canvas overflows
     // the container and overflow-auto provides panning.
     canvas.style.width = `${source.width / dpr}px`

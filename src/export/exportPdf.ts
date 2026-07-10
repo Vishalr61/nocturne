@@ -1,6 +1,7 @@
 import { PDFDocument } from 'pdf-lib'
-import { renderPageToCanvas, type PDFDocumentProxy } from '../engine/pdf'
+import type { PDFDocumentProxy } from '../engine/pdf'
 import { Recolorizer } from '../engine/recolor'
+import { renderDarkPage } from '../engine/pipeline'
 import type { Theme } from '../engine/theme'
 
 // Milestone 3: export a dark PDF you can drop into Apple Books.
@@ -37,9 +38,13 @@ export async function exportDarkPdf(doc: PDFDocumentProxy, opts: ExportOptions):
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i)
 
-      // dpr=1: renderScale already encodes the target DPI.
-      const source = await renderPageToCanvas(page, renderScale, 1)
-      recolor.render(source, source.width, source.height, { theme: opts.theme, satCut: opts.satCut })
+      // dpr=1: renderScale already encodes the target DPI. Same pipeline as the
+      // live reader — polarity, image masking, colour text — so what you export
+      // is what you saw.
+      await renderDarkPage(page, renderScale, 1, recolor, {
+        theme: opts.theme,
+        satCut: opts.satCut,
+      })
 
       const bytes = await canvasJpeg(glCanvas, quality)
       const jpg = await out.embedJpg(bytes)

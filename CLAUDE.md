@@ -40,15 +40,25 @@ These are mutually exclusive on the same rendering. v1 is **recolor-only
 
 1. **No blur.** We never bake a low-res bitmap. `engine/pdf.ts` re-renders the
    page with pdf.js at `cssScale * devicePixelRatio` every time zoom changes, and
-   `engine/recolor.ts` recolors that fresh render on the GPU. Text is always
+   `engine/recolor.ts` recolors that fresh render on the GPU. The reader sizes the
+   canvas so 1 backing pixel = 1 device pixel (fit-width × zoom). Text is always
    vector-crisp; pdf.js's text layer keeps it selectable.
-2. **No inverted images.** `engine/shader.ts` measures each pixel's *saturation*:
-   low-saturation greys (ink/paper) are remapped onto the theme by interpolating
-   `fg`<->`bg` across luminance (interpolation, not thresholding = smooth glyph
-   edges); saturated pixels (photos, charts, colour icons) pass through untouched.
-   This is the pixel-level first cut. **Structural masking** (leaving declared PDF
-   image XObjects untouched by their known bounding boxes) is more precise and
-   layers on top — see `imageRects` in `engine/classify.ts` (not yet populated).
+2. **No inverted images.** Decided per page by `engine/pipeline.ts` (shared by
+   the live reader and the export, so they can't drift):
+   - **Polarity**: a page whose dominant tone is already dark (black cover,
+     native dark theme) is already a night page — passes through untouched.
+   - **Structural masking**: declared image XObject rects (`imageRects` from
+     `engine/classify.ts`, extracted by walking the operator list's transform
+     stack) are preserved with original colours, dimmed ~18% against the dark
+     ground — when they are embedded (< half the page) and photo-like.
+   - **Content detection**: photos hiding inside full-page bitmaps (no useful
+     declared rect) are found by tile statistics — photos are mid-tone-rich,
+     text-on-paper is bimodal — and preserved by bounding box.
+   - **Colour text**: on pages with zero images, saturated pixels keep hue but
+     flip lightness (`uColorText`), so hyperlinks stay readable on dark.
+   - Everything else: `engine/shader.ts` remaps low-saturation ink/paper onto
+     the theme by interpolating `fg`<->`bg` across luminance (interpolation,
+     not thresholding = smooth glyph edges); saturated pixels pass through.
 
 ## The "never impossible" spine — `engine/classify.ts`
 
@@ -76,9 +86,11 @@ src/
 ├── engine/
 │   ├── pdf.ts        pdf.js wrapper: openPdf, renderPageToCanvas (dpr-sharp source)
 │   ├── theme.ts      THEMES (paper->bg, ink->fg anchor tones)
-│   ├── shader.ts     GLSL: saturation-aware ink/paper remap (the recolor rule)
+│   ├── shader.ts     GLSL: ink/paper remap + polarity/mask/colour-text uniforms
 │   ├── recolor.ts    Recolorizer: WebGL2 pass, source canvas -> recolored canvas
-│   └── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
+│   ├── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
+│   └── pipeline.ts   renderDarkPage: polarity, image masking, colour text —
+│                     the per-page decisions; shared by reader AND export
 ├── storage/db.ts     Dexie: books (original bytes), profiles, progress. Local only.
 └── reader/Reader.tsx open->recolor->page-turn->theme->zoom; persists profile+progress
 ```
@@ -89,10 +101,13 @@ src/
 2. ✅ **Export a dark PDF** (300 DPI, saturation-aware) — the "download → open in
    Books" flow. See `src/export/exportPdf.ts`. Raster for now (sharp but not
    selectable); vector export is a later milestone.
-3. Library shelf UI (your saved books) + resume-on-open.
-4. **Text Mode** (reflow) for font/size/spacing on prose.
-5. Structural image masking (declared XObject rects) + vector export (selectable).
-6. Scanned-PDF OCR path.
+3. ✅ Image handling v2 (`engine/pipeline.ts`): page polarity (dark covers pass
+   through), structural masking of declared XObject rects, content-derived
+   masking for photos inside full-page bitmaps, colour-text lightness flip.
+4. Library shelf UI (your saved books) + resume-on-open.
+5. **Text Mode** (reflow) for font/size/spacing on prose.
+6. Vector export (rewrite colour operators; selectable text in the export).
+7. Scanned-PDF OCR path.
 
 ## Guardrails for agents
 

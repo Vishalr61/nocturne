@@ -43,7 +43,9 @@ that always produces a readable dark page:
 - [x] Export a dark PDF (300 DPI, saturation-aware) — the "open in Books" flow
 - [ ] Library shelf UI + resume-on-open
 - [ ] **Text Mode** (reflow for full font / size / spacing control on prose)
-- [ ] Structural image masking via declared XObject rects
+- [x] Image handling v2: page polarity (dark covers pass through), structural
+      masking of declared image rects, content-derived photo masking inside
+      full-page bitmaps, readable colour text (hue kept, lightness flipped)
 - [ ] Vector export upgrade (selectable text in the exported PDF)
 - [ ] Scanned-PDF OCR path
 
