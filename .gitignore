@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+.claude/settings.local.json
+# leftover empty clone attempts, not part of the source tree
+/nocturne/
+/nocturne-clone-merge/
+*.local
+.DS_Store
+.vite
+dev-dist
