@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   allProgress,
   deleteBook,
+  exportLibrary,
+  importLibrary,
+  isPersisted,
   listBooks,
   renameBook,
   requestPersistentStorage,
@@ -37,6 +40,8 @@ export function Shelf({ onOpen }: ShelfProps) {
   const [books, setBooks] = useState<Book[] | null>(null)
   const [progress, setProgress] = useState<ProgressByBook>({})
   const [storage, setStorage] = useState<string>('')
+  const [durable, setDurable] = useState<boolean | null>(null)
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   /** Book id being renamed inline, and the draft text. */
   const [editing, setEditing] = useState<string | null>(null)
@@ -44,9 +49,15 @@ export function Shelf({ onOpen }: ShelfProps) {
   const editRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
-    const [bs, ps, est] = await Promise.all([listBooks(), allProgress(), storageEstimate()])
+    const [bs, ps, est, persisted] = await Promise.all([
+      listBooks(),
+      allProgress(),
+      storageEstimate(),
+      isPersisted(),
+    ])
     setBooks(bs)
     setProgress(ps)
+    setDurable(persisted)
     if (est && est.quota > 0) {
       setStorage(`${fmtBytes(est.used)} of ${fmtBytes(est.quota)} used`)
     }
@@ -54,9 +65,39 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   useEffect(() => {
     // Books are big and re-adding is a chore; ask the browser to keep them.
-    void requestPersistentStorage()
-    void refresh()
+    void requestPersistentStorage().then(() => refresh())
   }, [refresh])
+
+  const onBackup = useCallback(async () => {
+    const backup = await exportLibrary()
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `nocturne-library-${new Date(backup.exportedAt).toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    setNote(`Backed up ${backup.books.length} books · keep it in iCloud`)
+  }, [])
+
+  const onRestore = useCallback(
+    async (file: File) => {
+      try {
+        const res = await importLibrary(JSON.parse(await file.text()))
+        await refresh()
+        setNote(
+          res.pending
+            ? `Restored ${res.matched} here · ${res.pending} waiting — re-add those PDFs and they resume`
+            : `Restored ${res.matched} books`,
+        )
+      } catch {
+        setNote("That doesn't look like a Nocturne backup")
+      }
+    },
+    [refresh],
+  )
 
   const onAdd = useCallback(
     async (file: File) => {
@@ -307,9 +348,37 @@ export function Shelf({ onOpen }: ShelfProps) {
         )}
       </main>
 
-      {storage && (
-        <footer className="px-4 pb-4 text-center text-xs text-ink-faint sm:hidden">{storage}</footer>
-      )}
+      {/* Durability: say plainly whether these books are safe here, and give
+          the two escape hatches (backup file, restore) that make them so. */}
+      <footer className="mx-auto flex w-full max-w-[1180px] flex-wrap items-center justify-center gap-x-4 gap-y-1 px-5 pb-5 text-xs text-ink-faint sm:justify-between sm:px-8">
+        <span className="flex items-center gap-1.5">
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: durable ? '#c9a56a' : '#6f6041' }}
+          />
+          {durable === null
+            ? ''
+            : durable
+              ? 'Saved on this device'
+              : 'Not persisted — add to Home Screen to keep books safe'}
+          {storage && <span className="ml-2 opacity-70">· {storage}</span>}
+        </span>
+        <span className="flex items-center gap-4">
+          {note && <span className="text-ink-dim">{note}</span>}
+          <button className="underline-offset-2 hover:text-ink-soft hover:underline" onClick={() => void onBackup()}>
+            Back up
+          </button>
+          <label className="cursor-pointer underline-offset-2 hover:text-ink-soft hover:underline">
+            Restore
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && void onRestore(e.target.files[0])}
+            />
+          </label>
+        </span>
+      </footer>
     </div>
   )
 }

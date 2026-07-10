@@ -1,7 +1,7 @@
 import { openPdf, type PDFDocumentProxy } from '../engine/pdf'
 import { generateThumbnail } from '../engine/pipeline'
 import { DEFAULT_THEME } from '../engine/theme'
-import { addBook, hashBytes } from '../storage/db'
+import { addBook, hashBytes, takePendingTitle } from '../storage/db'
 
 // Importing a book = copying it into the app's own storage. On iOS the file
 // picker is the Files app (including iCloud Drive), so this is the whole
@@ -20,9 +20,13 @@ export async function importBook(file: File): Promise<string> {
     // Thumbnail is cosmetic; never let it block adding a book.
   }
 
+  // A restored backup may already know this book's name (matched by content
+  // hash) — that beats anything we could derive from the file.
+  const restored = await takePendingTitle(id)
+
   await addBook({
     id,
-    title: await deriveTitle(doc, file.name),
+    title: restored ?? (await deriveTitle(doc, file.name)),
     addedAt: Date.now(),
     pageCount: doc.numPages,
     size: buf.byteLength,

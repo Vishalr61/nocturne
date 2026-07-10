@@ -36,16 +36,34 @@ export interface Progress {
   updatedAt: number
 }
 
+/**
+ * A title waiting for its book. Restoring a backup brings back what you knew
+ * about books whose bytes aren't on this device yet; when you later re-add the
+ * PDF from iCloud, its content hash matches and the name comes back with it.
+ */
+export interface PendingTitle {
+  bookId: string
+  title: string
+}
+
 const db = new Dexie('nocturne') as Dexie & {
   books: EntityTable<Book, 'id'>
   profiles: EntityTable<Profile, 'bookId'>
   progress: EntityTable<Progress, 'bookId'>
+  pendingTitles: EntityTable<PendingTitle, 'bookId'>
 }
 
 db.version(1).stores({
   books: 'id, addedAt, title',
   profiles: 'bookId',
   progress: 'bookId, updatedAt',
+})
+
+db.version(2).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
 })
 
 export async function addBook(book: Book): Promise<void> {
@@ -142,6 +160,96 @@ export async function storageEstimate(): Promise<{ used: number; quota: number }
   } catch {
     return null
   }
+}
+
+/**
+ * Has the browser promised not to evict our books? Safari grants this to
+ * installed (home-screen) PWAs and clears storage for ordinary sites after ~7
+ * idle days, so this is the difference between "your library is safe" and
+ * "your library may vanish and need re-adding".
+ */
+export async function isPersisted(): Promise<boolean> {
+  try {
+    return (await navigator.storage?.persisted?.()) ?? false
+  } catch {
+    return false
+  }
+}
+
+// --- backup / restore ---------------------------------------------------------
+//
+// Everything Nocturne knows about your reading EXCEPT the PDF bytes: titles,
+// positions, per-book looks. It's kilobytes, so it fits anywhere (iCloud Drive,
+// email to yourself). The bytes deliberately stay out: your PDFs already live in
+// iCloud, and re-adding one matches by content hash, which re-attaches the name
+// and the position stored here. Restore, re-add, resume.
+
+export interface LibraryBackup {
+  version: 1
+  exportedAt: number
+  books: { id: string; title: string; pageCount: number; size: number; addedAt: number }[]
+  profiles: Profile[]
+  progress: Progress[]
+}
+
+export async function exportLibrary(): Promise<LibraryBackup> {
+  const [books, profiles, progress] = await Promise.all([
+    db.books.toArray(),
+    db.profiles.toArray(),
+    db.progress.toArray(),
+  ])
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    books: books.map((b) => ({
+      id: b.id,
+      title: b.title,
+      pageCount: b.pageCount,
+      size: b.size,
+      addedAt: b.addedAt,
+    })),
+    profiles,
+    progress,
+  }
+}
+
+export interface RestoreResult {
+  /** Books in the backup whose bytes are already on this device (renamed now). */
+  matched: number
+  /** Books whose bytes aren't here yet; their names/positions wait for a re-add. */
+  pending: number
+}
+
+export async function importLibrary(backup: LibraryBackup): Promise<RestoreResult> {
+  if (backup?.version !== 1 || !Array.isArray(backup.books)) {
+    throw new Error('not-a-nocturne-backup')
+  }
+  // Positions and looks are keyed by book id (a content hash), so they can be
+  // restored whether or not the bytes are present — a later re-add finds them.
+  await db.profiles.bulkPut(backup.profiles ?? [])
+  await db.progress.bulkPut(backup.progress ?? [])
+
+  const here = new Set((await db.books.toArray()).map((b) => b.id))
+  let matched = 0
+  const pending: PendingTitle[] = []
+  for (const b of backup.books) {
+    if (here.has(b.id)) {
+      await db.books.update(b.id, { title: b.title })
+      matched++
+    } else {
+      pending.push({ bookId: b.id, title: b.title })
+    }
+  }
+  await db.pendingTitles.bulkPut(pending)
+  return { matched, pending: pending.length }
+}
+
+/** A title restored from a backup, waiting for this book's bytes. Consumed once. */
+export async function takePendingTitle(id: string): Promise<string | undefined> {
+  const row = await db.pendingTitles.get(id)
+  if (!row) return undefined
+  await db.pendingTitles.delete(id)
+  return row.title
 }
 
 export { db }
