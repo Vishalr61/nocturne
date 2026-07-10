@@ -73,6 +73,12 @@ export async function saveThumb(id: string, thumb: string): Promise<void> {
   await db.books.update(id, { thumb })
 }
 
+/** Rename a book on the shelf. The id is the content hash, so it never changes. */
+export async function renameBook(id: string, title: string): Promise<void> {
+  const t = title.trim()
+  if (t) await db.books.update(id, { title: t })
+}
+
 /** The book to resume on launch: the one most recently opened or read. */
 export async function latestBookId(): Promise<string | undefined> {
   const books = await db.books.toArray()

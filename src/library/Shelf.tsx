@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   allProgress,
   deleteBook,
   listBooks,
+  renameBook,
   requestPersistentStorage,
   storageEstimate,
   type Book,
@@ -37,6 +38,10 @@ export function Shelf({ onOpen }: ShelfProps) {
   const [progress, setProgress] = useState<ProgressByBook>({})
   const [storage, setStorage] = useState<string>('')
   const [busy, setBusy] = useState(false)
+  /** Book id being renamed inline, and the draft text. */
+  const [editing, setEditing] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const editRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
     const [bs, ps, est] = await Promise.all([listBooks(), allProgress(), storageEstimate()])
@@ -74,6 +79,21 @@ export function Shelf({ onOpen }: ShelfProps) {
     },
     [refresh],
   )
+
+  const startRename = useCallback((book: Book) => {
+    setEditing(book.id)
+    setDraft(book.title)
+    // Select the whole title so typing replaces it (the common case).
+    requestAnimationFrame(() => editRef.current?.select())
+  }, [])
+
+  const commitRename = useCallback(async () => {
+    if (!editing) return
+    const id = editing
+    setEditing(null)
+    await renameBook(id, draft)
+    void refresh()
+  }, [editing, draft, refresh])
 
   // "Reading now" = the book you touched most recently.
   const hero =
@@ -208,6 +228,7 @@ export function Shelf({ onOpen }: ShelfProps) {
               {books.map((b) => {
                 const p = progress[b.id]
                 const pct = p ? Math.round(p.percent * 100) : 0
+                const isEditing = editing === b.id
                 return (
                   <div key={b.id} className="anim-rise group relative">
                     <button className="block w-full text-left" onClick={() => onOpen(b.id)}>
@@ -232,21 +253,52 @@ export function Shelf({ onOpen }: ShelfProps) {
                           <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
                         </div>
                       </div>
-                      <div className="mt-3 truncate font-serif text-[15px] leading-tight text-ink-shelf">
+                    </button>
+
+                    {isEditing ? (
+                      <input
+                        ref={editRef}
+                        aria-label="Book title"
+                        className="mt-3 w-full rounded-md border border-accent/50 bg-inset px-2 py-1 font-serif text-[15px] text-ink-shelf outline-none"
+                        value={draft}
+                        autoFocus
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={() => void commitRename()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void commitRename()
+                          else if (e.key === 'Escape') setEditing(null)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="mt-3 block w-full truncate text-left font-serif text-[15px] leading-tight text-ink-shelf"
+                        onClick={() => onOpen(b.id)}
+                      >
                         {b.title}
-                      </div>
-                      <div className="mt-1 flex items-baseline justify-between text-xs tabular-nums text-ink-dim">
-                        <span className="truncate">{p ? `${pct}% · p. ${p.page}` : 'Not started'}</span>
-                        <span className="ml-2 flex-none">{p ? relTime(p.updatedAt) : ''}</span>
-                      </div>
-                    </button>
-                    <button
-                      aria-label={`Remove ${b.title}`}
-                      className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-ink-body opacity-60 transition-opacity hover:opacity-100"
-                      onClick={() => void onDelete(b)}
-                    >
-                      ✕
-                    </button>
+                      </button>
+                    )}
+
+                    <div className="mt-1 flex items-baseline justify-between text-xs tabular-nums text-ink-dim">
+                      <span className="truncate">{p ? `${pct}% · p. ${p.page}` : 'Not started'}</span>
+                      <span className="ml-2 flex-none">{p ? relTime(p.updatedAt) : ''}</span>
+                    </div>
+
+                    <div className="absolute right-2 top-2 flex gap-1.5">
+                      <button
+                        aria-label={`Rename ${b.title}`}
+                        className="rounded-full bg-black/60 px-2 py-0.5 text-xs text-ink-body opacity-60 transition-opacity hover:opacity-100"
+                        onClick={() => startRename(b)}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        aria-label={`Remove ${b.title}`}
+                        className="rounded-full bg-black/60 px-2 py-0.5 text-xs text-ink-body opacity-60 transition-opacity hover:opacity-100"
+                        onClick={() => void onDelete(b)}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 )
               })}
