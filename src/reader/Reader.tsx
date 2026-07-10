@@ -53,14 +53,28 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [chrome, setChrome] = useState(true)
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
+  const [toc, setToc] = useState<TocItem[]>([])
+  const [showToc, setShowToc] = useState(false)
+  // The page number field edits as free text so typing "150" doesn't jump to
+  // page 1 then 15; it commits whenever the text is a valid page.
+  const [pageStr, setPageStr] = useState('1')
 
-  // Pinch commit data: applied (then cleared) by the next draw().
-  const pinchCommitRef = useRef<{ factor: number; fx: number; fy: number } | null>(null)
+  // Pinch commit data: applied (then cleared) by the next draw(). px/py is the
+  // page point that was under the fingers (canvas CSS coords at the old zoom),
+  // scale converts it to the new zoom, mx/my is where the fingers ended.
+  const pinchCommitRef = useRef<{
+    px: number
+    py: number
+    scale: number
+    mx: number
+    my: number
+  } | null>(null)
 
   // --- load the book from local storage -------------------------------------
   useEffect(() => {
     let alive = true
     setBusy(true)
+    setToc([]) // don't show the previous book's contents while loading
     void (async () => {
       const book = await getBook(bookId)
       if (!book) {
@@ -76,6 +90,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       loadedIdRef.current = bookId
       setTitle(book.title)
       setPageCount(doc.numPages)
+      void loadOutline(doc).then((items) => {
+        if (alive) setToc(items)
+      })
 
       const [profile, progress] = await Promise.all([getProfile(bookId), getProgress(bookId)])
       if (!alive) return
@@ -115,15 +132,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
     const pdfPage = await doc.getPage(page)
 
-    // Fit-width base scale: zoom=1 fills the container exactly, and the canvas is
-    // displayed at its own CSS size (set below) so 1 backing pixel = 1 device
-    // pixel — the browser never rescales the render (that rescale = blur).
+    // Fit-page base scale: at zoom=1 the whole page is visible — width-bound on
+    // phones (same as the old fit-width), usually height-bound on landscape
+    // desktop windows, which used to overflow with no way to zoom out. The
+    // canvas is displayed at its own CSS size (set below) so 1 backing pixel =
+    // 1 device pixel — the browser never rescales the render (that rescale = blur).
     const dpr = Math.min(window.devicePixelRatio || 1, 3)
-    const pageWidth = pdfPage.getViewport({ scale: 1 }).width
-    const containerWidth = containerRef.current
-      ? containerRef.current.clientWidth - 16 // p-2 padding both sides
-      : pageWidth
-    const cssScale = Math.max(0.1, containerWidth / pageWidth) * zoom
+    const pageVp = pdfPage.getViewport({ scale: 1 })
+    const scroller = containerRef.current
+    const availW = scroller ? scroller.clientWidth - 16 : pageVp.width // p-2 padding
+    const availH = scroller ? scroller.clientHeight - 16 : pageVp.height
+    const cssScale =
+      Math.max(0.1, Math.min(availW / pageVp.width, availH / pageVp.height)) * zoom
 
     // The pipeline decides polarity, image masking, and colour-text handling
     // per page, then draws the recolored result into our canvas. It may clamp
@@ -143,13 +163,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     canvas.style.height = `${source.height / renderedDpr}px`
     canvas.style.transform = '' // clear any live pinch preview
 
-    // Keep the pinch focal point where the fingers were.
+    // Keep the pinch focal point where the fingers ended: measure the freshly
+    // laid-out canvas and scroll so the page point that was under the fingers
+    // lands exactly where they were — exact regardless of centering or padding.
     const commit = pinchCommitRef.current
-    const scroller = containerRef.current
     if (commit && scroller) {
       pinchCommitRef.current = null
-      scroller.scrollLeft = (scroller.scrollLeft + commit.fx) * commit.factor - commit.fx
-      scroller.scrollTop = (scroller.scrollTop + commit.fy) * commit.factor - commit.fy
+      const rect = canvas.getBoundingClientRect()
+      scroller.scrollLeft += rect.left + commit.scale * commit.px - commit.mx
+      scroller.scrollTop += rect.top + commit.scale * commit.py - commit.my
     }
   }, [page, zoom, themeId, imageDim, docVersion])
 
@@ -169,10 +191,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     enqueueDraw()
   }, [enqueueDraw])
 
-  // Re-render on viewport changes (rotation, window resize) so fit-width holds.
+  // Refit whenever the container resizes for any reason — rotation, window
+  // resize, immersive chrome toggling (that changes the height fit-page uses).
   useEffect(() => {
-    window.addEventListener('resize', enqueueDraw)
-    return () => window.removeEventListener('resize', enqueueDraw)
+    const scroller = containerRef.current
+    if (!scroller) return
+    const ro = new ResizeObserver(enqueueDraw)
+    ro.observe(scroller)
+    return () => ro.disconnect()
   }, [enqueueDraw])
 
   // iOS kills WebGL contexts under memory pressure or when the PWA is
@@ -196,59 +222,84 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [enqueueDraw])
 
   // --- pinch to zoom ----------------------------------------------------------
+  // The live preview must do what real pinches do: keep the page point that was
+  // under the fingers pinned to the fingers as they both spread AND move. So the
+  // gesture is measured once at start (untransformed canvas rect, midpoint,
+  // finger distance) and every move solves the translate+scale that maps the
+  // start point to the current midpoint. The old version recomputed its focal
+  // point from the already-transformed canvas each move, which made the anchor
+  // drift — the "doesn't feel right" wobble.
   useEffect(() => {
     const scroller = containerRef.current
     const canvas = canvasRef.current
     if (!scroller || !canvas) return
 
-    let startDist = 0
-    let startZoom = 1
-    let factor = 1
-    let fx = 0
-    let fy = 0
     let active = false
+    let startZoom = zoom
+    let rect0 = { left: 0, top: 0 } // canvas position at gesture start
+    let d0 = 1 // finger distance at start
+    let f = 1 // clamped scale factor this gesture
+    let m0 = { x: 0, y: 0 } // midpoint at start (viewport coords)
+    let mNow = { x: 0, y: 0 }
 
+    const mid = (t: TouchList) => ({
+      x: (t[0].clientX + t[1].clientX) / 2,
+      y: (t[0].clientY + t[1].clientY) / 2,
+    })
     const dist = (t: TouchList) =>
       Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
 
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 2) return
       e.preventDefault() // stop the browser zooming the whole app
-      const rect = scroller.getBoundingClientRect()
-      startDist = dist(e.touches)
+      canvas.style.transform = '' // measure the untransformed canvas
+      const r = canvas.getBoundingClientRect()
+      rect0 = { left: r.left, top: r.top }
+      m0 = mNow = mid(e.touches)
+      d0 = dist(e.touches)
       startZoom = zoom
-      factor = 1
-      fx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left
-      fy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
+      f = 1
       active = true
+      canvas.style.transformOrigin = '0 0'
+      canvas.style.willChange = 'transform'
     }
 
     const onMove = (e: TouchEvent) => {
       if (!active || e.touches.length !== 2) return
       e.preventDefault()
-      factor = dist(e.touches) / startDist
-      // Clamp the preview to what the commit will allow.
-      factor = Math.min(4, Math.max(1, startZoom * factor)) / startZoom
-      // Live preview: cheap CSS scale about the focal point. The commit below
-      // re-renders vector-crisp, so this soft preview lasts only the gesture.
-      const cRect = canvas.getBoundingClientRect()
-      const sRect = scroller.getBoundingClientRect()
-      const ox = fx + sRect.left - cRect.left
-      const oy = fy + sRect.top - cRect.top
-      canvas.style.transformOrigin = `${ox}px ${oy}px`
-      canvas.style.transform = `scale(${factor})`
+      mNow = mid(e.touches)
+      // Clamp the preview to what the commit will allow (zoom 1..4).
+      f = Math.min(4, Math.max(1, startZoom * (dist(e.touches) / d0))) / startZoom
+      // With origin 0 0, the transform maps canvas point p to translate + f·p:
+      // solve for the translate that puts the start point at the live midpoint.
+      const tx = mNow.x - rect0.left - f * (m0.x - rect0.left)
+      const ty = mNow.y - rect0.top - f * (m0.y - rect0.top)
+      canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${f})`
     }
 
     const onEnd = (e: TouchEvent) => {
       if (!active || e.touches.length >= 2) return
       active = false
-      const next = Math.min(4, Math.max(1, startZoom * factor))
-      if (Math.abs(next - startZoom) < 0.02) {
+      canvas.style.willChange = ''
+      const next = startZoom * f
+      const commit = {
+        px: m0.x - rect0.left,
+        py: m0.y - rect0.top,
+        scale: f,
+        mx: mNow.x,
+        my: mNow.y,
+      }
+      if (Math.abs(next - zoom) < 0.02) {
+        // Zoom effectively unchanged (tiny pinch, or panning while clamped at
+        // 1x/4x): no re-render — apply the pan straight to the scroll position.
         canvas.style.transform = ''
+        const r = canvas.getBoundingClientRect()
+        scroller.scrollLeft += r.left + commit.px - commit.mx
+        scroller.scrollTop += r.top + commit.py - commit.my
         return
       }
-      pinchCommitRef.current = { factor: next / startZoom, fx, fy }
-      setZoom(next) // triggers a crisp re-render; draw() clears the preview
+      pinchCommitRef.current = commit
+      setZoom(next) // crisp re-render; draw() applies the commit and clears the preview
     }
 
     scroller.addEventListener('touchstart', onStart, { passive: false })
@@ -279,6 +330,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const turn = (delta: number) =>
     setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
 
+  // Keep the editable page field in sync when the page changes any other way.
+  useEffect(() => {
+    setPageStr(String(page))
+  }, [page])
+
+  const onPageInput = (v: string) => {
+    setPageStr(v)
+    const n = Number(v)
+    if (Number.isInteger(n) && n >= 1 && n <= (pageCount || 1)) setPage(n)
+  }
+
   const onExport = useCallback(async () => {
     const doc = docRef.current
     if (!doc) return
@@ -296,7 +358,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [themeId, title])
 
   return (
-    <div className="flex h-full flex-col bg-night-950 text-neutral-200">
+    <div className="relative flex h-full flex-col bg-night-950 text-neutral-200">
       {chrome && (
         <header className="flex items-center gap-3 px-4 py-3 text-sm">
           <button
@@ -346,13 +408,42 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             <button className="rounded bg-night-700 px-2 py-1" onClick={() => turn(-1)}>
               ‹
             </button>
-            <span className="tabular-nums text-neutral-400">
-              {pageCount ? `${page} / ${pageCount}` : '—'}
-            </span>
+            <input
+              aria-label="Page number"
+              type="text"
+              inputMode="numeric"
+              className="w-12 rounded bg-night-700 px-1 py-1 text-center tabular-nums"
+              value={pageStr}
+              onChange={(e) => onPageInput(e.target.value)}
+              onBlur={() => setPageStr(String(page))}
+            />
+            <span className="tabular-nums text-neutral-500">/ {pageCount || '—'}</span>
             <button className="rounded bg-night-700 px-2 py-1" onClick={() => turn(1)}>
               ›
             </button>
           </div>
+
+          {pageCount > 1 && (
+            <input
+              aria-label="Go to page"
+              type="range"
+              min={1}
+              max={pageCount}
+              step={1}
+              value={page}
+              onChange={(e) => setPage(Number(e.target.value))}
+              className="min-w-[120px] flex-1"
+            />
+          )}
+
+          {toc.length > 0 && (
+            <button
+              className="rounded bg-night-700 px-3 py-1 text-neutral-200 hover:bg-night-800"
+              onClick={() => setShowToc(true)}
+            >
+              Contents
+            </button>
+          )}
 
           <select
             className="rounded bg-night-700 px-2 py-1"
@@ -401,6 +492,76 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           {cls && <span className="ml-auto text-xs text-neutral-600">page: {cls.kind}</span>}
         </footer>
       )}
+
+      {showToc && (
+        <div className="absolute inset-0 z-20 flex flex-col bg-night-950/95">
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm font-medium">Contents</span>
+            <button
+              className="rounded bg-night-700 px-3 py-1 text-sm"
+              onClick={() => setShowToc(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto px-2 pb-6">
+            {toc.map((t, i) => (
+              <button
+                key={i}
+                className="flex w-full items-baseline justify-between gap-3 rounded px-2 py-2 text-left text-sm hover:bg-night-800"
+                style={{ paddingLeft: `${8 + t.depth * 16}px` }}
+                onClick={() => {
+                  setPage(t.page)
+                  setShowToc(false)
+                }}
+              >
+                <span className="truncate">{t.title}</span>
+                <span className="tabular-nums text-neutral-500">{t.page}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+interface TocItem {
+  title: string
+  page: number
+  depth: number
+}
+
+interface OutlineNode {
+  title: string
+  dest: unknown
+  items?: OutlineNode[]
+}
+
+/**
+ * Flatten the PDF's outline (bookmarks) into a jumpable chapter list. Each
+ * entry's destination is resolved to a page index; entries that don't point
+ * anywhere usable are skipped. Books without an outline return [] and the
+ * Contents button simply doesn't appear.
+ */
+async function loadOutline(doc: PDFDocumentProxy): Promise<TocItem[]> {
+  const out: TocItem[] = []
+  const walk = async (items: OutlineNode[], depth: number) => {
+    for (const it of items) {
+      try {
+        let dest = it.dest
+        if (typeof dest === 'string') dest = await doc.getDestination(dest)
+        if (Array.isArray(dest) && dest[0]) {
+          const ref = dest[0] as { num: number; gen: number }
+          out.push({ title: it.title, page: (await doc.getPageIndex(ref)) + 1, depth })
+        }
+      } catch {
+        /* unnavigable entry; skip it */
+      }
+      if (it.items?.length && depth < 2) await walk(it.items, depth + 1)
+    }
+  }
+  const root = (await doc.getOutline()) as OutlineNode[] | null
+  if (root) await walk(root, 0)
+  return out
 }
