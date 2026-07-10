@@ -45,10 +45,15 @@ These are mutually exclusive on the same rendering. v1 is **recolor-only
    page with pdf.js at `cssScale * devicePixelRatio` every time zoom changes, and
    `engine/recolor.ts` recolors that fresh render on the GPU. The reader sizes the
    canvas so 1 backing pixel = 1 device pixel (fit-page × zoom). Text is always
-   vector-crisp. Note: no text layer is rendered, so page text is **not**
-   selectable today — `engine/search.ts` reads the same `getTextContent()` data
-   to search and to draw highlight boxes over the canvas. A real selectable text
-   layer is a separate (easy) milestone.
+   vector-crisp. `reader/TextLayer.tsx` overlays transparent, selectable spans
+   (pdf.js `getTextContent()`), so text can be selected, copied and highlighted;
+   it is `pointer-events: none` unless select mode is on, so it never eats the
+   taps that turn pages.
+   **Invariant:** anything drawn over the canvas (text layer, search matches,
+   highlights) must derive from the *same* `{pdfPage, pageNo, cssScale, crop}`
+   object the canvas was rendered with — `Reader`'s `view` state. Splitting
+   those apart once let the page number run ahead of the page proxy and cached
+   the wrong page's text under the new number. Cache text by `page.pageNumber`.
 2. **No inverted images.** Decided per page by `engine/pipeline.ts` (shared by
    the live reader and the export, so they can't drift):
    - **Polarity**: a page whose dominant tone is already dark (black cover,
@@ -124,8 +129,11 @@ src/
    a manifest, so a "ghost shelf" lists books whose PDF isn't on this device.
    Content-hash ids make re-adding from Files resume exactly. PDFs still never
    leave the device. Needs a Cloudflare account (`wrangler login`).
-7. Continuous scroll + landscape two-page spread.
-8. Selectable text layer → passage highlights (and text selection/copy).
+7. ✅ Selectable text layer (`reader/TextLayer.tsx`) → passage highlights,
+   copy. Off by default ("T" toggles select mode) so taps still turn pages.
+   Highlights persist as character RANGES, never pixel rects, so they survive
+   zoom/crop/other screens.
+8. Continuous scroll + landscape two-page spread.
 9. **Text Mode** (reflow) for font/size/spacing on prose.
 10. Vector export (rewrite colour operators; selectable text in the export).
 11. Scanned-PDF OCR path.

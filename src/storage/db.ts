@@ -57,12 +57,28 @@ export interface Bookmark {
 
 export const bookmarkId = (bookId: string, page: number) => `${bookId}:${page}`
 
+/**
+ * A highlighted passage. Stored as a character RANGE into the page's flattened
+ * text, never as pixel rects: ranges survive zoom, margin-crop, and a different
+ * screen, because the boxes are recomputed from the PDF's own geometry.
+ */
+export interface Highlight {
+  id: string
+  bookId: string
+  page: number
+  start: number
+  end: number
+  text: string
+  createdAt: number
+}
+
 const db = new Dexie('nocturne') as Dexie & {
   books: EntityTable<Book, 'id'>
   profiles: EntityTable<Profile, 'bookId'>
   progress: EntityTable<Progress, 'bookId'>
   pendingTitles: EntityTable<PendingTitle, 'bookId'>
   bookmarks: EntityTable<Bookmark, 'id'>
+  highlights: EntityTable<Highlight, 'id'>
 }
 
 db.version(1).stores({
@@ -86,6 +102,15 @@ db.version(3).stores({
   bookmarks: 'id, bookId, page',
 })
 
+db.version(4).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+  highlights: 'id, bookId, [bookId+page]',
+})
+
 export async function addBook(book: Book): Promise<void> {
   await db.books.put(book)
 }
@@ -105,7 +130,39 @@ export async function deleteBook(id: string): Promise<void> {
     db.profiles.delete(id),
     db.progress.delete(id),
     db.bookmarks.where('bookId').equals(id).delete(),
+    db.highlights.where('bookId').equals(id).delete(),
   ])
+}
+
+// --- highlights ---------------------------------------------------------------
+
+export async function listHighlights(bookId: string): Promise<Highlight[]> {
+  const rows = await db.highlights.where('bookId').equals(bookId).toArray()
+  return rows.sort((a, b) => a.page - b.page || a.start - b.start)
+}
+
+export async function highlightsOnPage(bookId: string, page: number): Promise<Highlight[]> {
+  return db.highlights.where('[bookId+page]').equals([bookId, page]).toArray()
+}
+
+export async function addHighlight(
+  h: Omit<Highlight, 'id' | 'createdAt'>,
+): Promise<Highlight> {
+  const row: Highlight = { ...h, id: crypto.randomUUID(), createdAt: Date.now() }
+  await db.highlights.put(row)
+  return row
+}
+
+export async function removeHighlight(id: string): Promise<void> {
+  await db.highlights.delete(id)
+}
+
+/** How many highlights each book has, for the shelf. */
+export async function highlightCounts(): Promise<Record<string, number>> {
+  const rows = await db.highlights.toArray()
+  const out: Record<string, number> = {}
+  for (const r of rows) out[r.bookId] = (out[r.bookId] ?? 0) + 1
+  return out
 }
 
 // --- bookmarks ----------------------------------------------------------------
@@ -244,16 +301,19 @@ export interface LibraryBackup {
   books: { id: string; title: string; pageCount: number; size: number; addedAt: number }[]
   profiles: Profile[]
   progress: Progress[]
-  /** Optional so backups written before bookmarks existed still restore. */
+  /** Optional so backups written before these existed still restore, and so an
+   *  older build can still read a newer backup (additive, no version bump). */
   bookmarks?: Bookmark[]
+  highlights?: Highlight[]
 }
 
 export async function exportLibrary(): Promise<LibraryBackup> {
-  const [books, profiles, progress, bookmarks] = await Promise.all([
+  const [books, profiles, progress, bookmarks, highlights] = await Promise.all([
     db.books.toArray(),
     db.profiles.toArray(),
     db.progress.toArray(),
     db.bookmarks.toArray(),
+    db.highlights.toArray(),
   ])
   return {
     version: 1,
@@ -268,6 +328,7 @@ export async function exportLibrary(): Promise<LibraryBackup> {
     profiles,
     progress,
     bookmarks,
+    highlights,
   }
 }
 
@@ -287,6 +348,7 @@ export async function importLibrary(backup: LibraryBackup): Promise<RestoreResul
   await db.profiles.bulkPut(backup.profiles ?? [])
   await db.progress.bulkPut(backup.progress ?? [])
   await db.bookmarks.bulkPut(backup.bookmarks ?? [])
+  await db.highlights.bulkPut(backup.highlights ?? [])
 
   const here = new Set((await db.books.toArray()).map((b) => b.id))
   let matched = 0

@@ -18,26 +18,33 @@ import {
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { detectContentBox } from '../engine/crop'
 import {
+  getPageText,
   matchRectsOnPage,
+  rangeRects,
   searchBook,
   type HighlightRect,
   type SearchHit,
   type TextCache,
 } from '../engine/search'
+import { TextLayer, type TextSelection } from './TextLayer'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBookmark,
+  addHighlight,
   getBook,
   getProfile,
   getProgress,
   listBookmarks,
+  listHighlights,
   removeBookmark,
+  removeHighlight,
   setBookmarkNote,
   saveProfile,
   saveProgress,
   saveThumb,
   touchBook,
   type Bookmark,
+  type Highlight,
 } from '../storage/db'
 
 // The reader: a saved book, recolored crisply on a canvas. Phone-first:
@@ -106,6 +113,22 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** Page whose bookmark note is being edited in the Contents list, and the draft. */
   const [noteFor, setNoteFor] = useState<number | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
+  const [marks, setMarks] = useState<Highlight[]>([]) // saved highlights, this book
+  const [markRects, setMarkRects] = useState<{ id: string; rects: HighlightRect[] }[]>([])
+  /** Select mode: while on, the text layer takes taps so you can select/copy. */
+  const [selectMode, setSelectMode] = useState(false)
+  const [selection, setSelection] = useState<TextSelection | null>(null)
+  /**
+   * The page and the geometry it was drawn with, published together. These must
+   * never be separate pieces of state: a render where the page number had moved
+   * on but the page proxy hadn't produced text-layer boxes for the wrong page.
+   */
+  const [view, setView] = useState<{
+    pdfPage: PDFPageProxy
+    pageNo: number
+    cssScale: number
+    crop: CropBox | null
+  } | null>(null)
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
@@ -130,6 +153,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setBusy(true)
     setToc([]) // don't show the previous book's contents while loading
     setBookmarks([])
+    setMarks([])
+    setMarkRects([])
+    setView(null)
     setCropBox(null)
     clsCacheRef.current.clear()
     textCacheRef.current.clear()
@@ -157,6 +183,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       })
       void listBookmarks(bookId).then((bs) => {
         if (alive) setBookmarks(bs)
+      })
+      void listHighlights(bookId).then((hs) => {
+        if (alive) setMarks(hs)
       })
       // Detect the book's shared content box in the background; when it lands,
       // the page re-fits with the margins cropped away.
@@ -298,6 +327,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
 
     setCls(result.cls)
+    // Publish the page together with the exact geometry it was rendered at. The
+    // text layer and every highlight box derive from this one object.
+    setView((v) =>
+      v && v.pdfPage === pdfPage && v.cssScale === cssScale && v.crop === crop
+        ? v
+        : { pdfPage, pageNo: page, cssScale, crop },
+    )
     // Display exactly at render resolution; when zoom > 1 the canvas overflows
     // the container and overflow-auto provides panning. If the dpr was clamped,
     // the CSS size still honours the requested zoom (slightly soft beats a crash).
@@ -310,7 +346,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     if (highlightQuery) {
       try {
         setHighlights(
-          await matchRectsOnPage(pdfPage, page, highlightQuery, textCacheRef.current, cssScale, crop),
+          await matchRectsOnPage(pdfPage, highlightQuery, textCacheRef.current, cssScale, crop),
         )
       } catch {
         setHighlights(NO_HIGHLIGHTS)
@@ -547,14 +583,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         if (showSearch) setShowSearch(false)
         else if (showSettings) setShowSettings(false)
         else if (showToc) setShowToc(false)
-        else if (highlightQuery) setHighlightQuery('')
+        else if (selectMode) {
+          setSelectMode(false)
+          setSelection(null)
+        } else if (highlightQuery) setHighlightQuery('')
         else onShelf()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageCount, showSettings, showToc, showSearch, highlightQuery, onShelf])
+  }, [pageCount, showSettings, showToc, showSearch, selectMode, highlightQuery, onShelf])
 
   // Keep the editable page field in sync when the page changes any other way.
   useEffect(() => {
@@ -629,6 +668,60 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     if (!id) return
     await removeBookmark(id, p)
     setBookmarks(await listBookmarks(id))
+  }, [])
+
+  // --- highlights ---------------------------------------------------------------
+  // Boxes are derived, never stored: recomputed from each highlight's character
+  // range against the current render, so zoom and crop can't misplace them.
+  useEffect(() => {
+    if (!view) return
+    const onPage = marks.filter((m) => m.page === view.pageNo)
+    if (!onPage.length) {
+      setMarkRects((r) => (r.length ? [] : r))
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const pt = await getPageText(view.pdfPage, textCacheRef.current)
+        if (!alive) return
+        setMarkRects(
+          onPage.map((m) => ({
+            id: m.id,
+            rects: rangeRects(view.pdfPage, pt, m.start, m.end, view.cssScale, view.crop),
+          })),
+        )
+      } catch {
+        if (alive) setMarkRects([])
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [view, marks])
+
+  const saveHighlight = useCallback(async () => {
+    const id = loadedIdRef.current
+    // Record against the page the selection was actually made on, not the page
+    // state, which could have moved on.
+    if (!id || !selection || !view) return
+    await addHighlight({
+      bookId: id,
+      page: view.pageNo,
+      start: selection.start,
+      end: selection.end,
+      text: selection.text.slice(0, 400),
+    })
+    setMarks(await listHighlights(id))
+    setSelection(null)
+    window.getSelection()?.removeAllRanges()
+  }, [selection, view])
+
+  const dropHighlight = useCallback(async (hid: string) => {
+    const id = loadedIdRef.current
+    if (!id) return
+    await removeHighlight(hid)
+    setMarks(await listHighlights(id))
   }, [])
 
   const commitNote = useCallback(async () => {
@@ -706,6 +799,22 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           >
             {marked ? '★' : '☆'}
           </button>
+          {(cls?.textChars ?? 0) > 0 && (
+            <button
+              aria-label={selectMode ? 'Leave select mode' : 'Select text'}
+              title="Select text to copy or highlight"
+              className={`rounded-[10px] border px-2.5 py-1 font-serif text-sm transition-opacity hover:opacity-100 ${
+                selectMode ? 'border-accent text-accent opacity-100' : 'opacity-80'
+              }`}
+              style={selectMode ? undefined : { borderColor: hairline }}
+              onClick={() => {
+                setSelection(null)
+                setSelectMode((s) => !s)
+              }}
+            >
+              T
+            </button>
+          )}
           <button
             aria-label="Search in book"
             className="rounded-[10px] border px-2.5 py-1 text-sm opacity-80 transition-opacity hover:opacity-100"
@@ -730,20 +839,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         className="relative flex-1 overflow-auto"
         style={{ touchAction: 'pan-x pan-y' }}
       >
-        {/* Tap zones: left/right thirds turn pages, the middle toggles chrome. */}
+        {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
+            Inert in select mode, where a drag means "select", not "turn". */}
         <button
           aria-label="Previous page"
-          className="absolute inset-y-0 left-0 z-10 w-1/3"
+          className="absolute inset-y-0 left-0 z-10 w-1/3 disabled:pointer-events-none"
+          disabled={selectMode}
           onClick={() => turn(-1)}
         />
         <button
           aria-label="Toggle controls"
-          className="absolute inset-x-1/3 inset-y-0 z-10"
+          className="absolute inset-x-1/3 inset-y-0 z-10 disabled:pointer-events-none"
+          disabled={selectMode}
           onClick={() => setChrome((c) => !c)}
         />
         <button
           aria-label="Next page"
-          className="absolute inset-y-0 right-0 z-10 w-1/3"
+          className="absolute inset-y-0 right-0 z-10 w-1/3 disabled:pointer-events-none"
+          disabled={selectMode}
           onClick={() => turn(1)}
         />
         {/* quiet edge chevrons: a desktop affordance for the tap zones */}
@@ -768,8 +881,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         <div className="flex min-h-full min-w-full p-2">
           <div className="relative m-auto">
             <canvas ref={canvasRef} className="block rounded shadow-2xl" />
-            {/* Search matches, drawn over the recolored page. Pointer-events off
-                so taps still turn pages through them. */}
+
+            {/* Saved highlights, then search matches, both drawn over the
+                recolored page. Pointer-events off so taps still turn pages. */}
+            {markRects.flatMap(({ id, rects }) =>
+              rects.map((r, i) => (
+                <div
+                  key={`${id}-${i}`}
+                  className="pointer-events-none absolute rounded-[2px] bg-accent/[0.22]"
+                  style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+                />
+              )),
+            )}
             {highlights.map((r, i) => (
               <div
                 key={i}
@@ -777,6 +900,20 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
               />
             ))}
+
+            {/* Invisible selectable text. Inert unless select mode is on, so it
+                never steals the taps that turn pages. */}
+            {view && (cls?.textChars ?? 0) > 0 && (
+              <TextLayer
+                page={view.pdfPage}
+                pageNo={view.pageNo}
+                cssScale={view.cssScale}
+                crop={view.crop}
+                cache={textCacheRef.current}
+                active={selectMode}
+                onSelect={setSelection}
+              />
+            )}
           </div>
         </div>
         {busy && (
@@ -785,6 +922,33 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           </div>
         )}
       </div>
+
+      {/* Selection popover: the only way a highlight gets made. */}
+      {selectMode && selection && (
+        <div
+          className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
+          style={{ left: selection.x, top: Math.max(48, selection.y - 10) }}
+        >
+          <div className="flex overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+            <button
+              className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
+              onClick={() => void saveHighlight()}
+            >
+              ★ Highlight
+            </button>
+            <button
+              className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
+              onClick={() => {
+                void navigator.clipboard?.writeText(selection.text)
+                setSelection(null)
+                window.getSelection()?.removeAllRanges()
+              }}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+      )}
 
       {chrome && (
         <footer
@@ -823,7 +987,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {pageCount ? `${Math.round((page / pageCount) * 100)}%` : ''}
           </span>
 
-          {(toc.length > 0 || bookmarks.length > 0) && (
+          {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
             <button
               className="whitespace-nowrap text-[13px] opacity-70 transition-opacity hover:opacity-100"
               onClick={() => setShowToc(true)}
@@ -832,6 +996,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </button>
           )}
         </footer>
+      )}
+
+      {/* While selecting, taps must not turn pages — say so, and offer the exit. */}
+      {selectMode && !selection && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center">
+          <span className="rounded-full bg-panel/90 px-4 py-1.5 text-xs text-ink-mid shadow-lg">
+            Select text to copy or highlight · page turns paused
+          </span>
+        </div>
       )}
 
       {/* Reading settings: a focused drawer, not a toolbar. Everything that
@@ -1104,12 +1277,44 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     </button>
                   </div>
                 ))}
-                {toc.length > 0 && (
-                  <div className="px-3 pb-2 pt-5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Chapters
-                  </div>
-                )}
               </>
+            )}
+
+            {marks.length > 0 && (
+              <>
+                <div className="px-3 pb-2 pt-5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Highlights
+                </div>
+                {marks.map((m) => (
+                  <div key={m.id} className="flex items-center gap-1">
+                    <button
+                      className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
+                      onClick={() => {
+                        setPage(m.page)
+                        setShowToc(false)
+                      }}
+                    >
+                      <span className="truncate font-serif text-[15px] italic text-ink-shelf">
+                        “{m.text}”
+                      </span>
+                      <span className="text-sm tabular-nums text-ink-dim">{m.page}</span>
+                    </button>
+                    <button
+                      aria-label={`Remove highlight on page ${m.page}`}
+                      className="rounded-md px-2 py-1 text-xs text-ink-faint hover:text-ink-body"
+                      onClick={() => void dropHighlight(m.id)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {toc.length > 0 && (bookmarks.length > 0 || marks.length > 0) && (
+              <div className="px-3 pb-2 pt-5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                Chapters
+              </div>
             )}
             {toc.map((t, i) => (
               <button

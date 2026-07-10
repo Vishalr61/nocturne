@@ -10,7 +10,7 @@ import type { CropBox } from './pdf'
 // the first hits you see are usually the ones you meant.
 
 /** One text run on a page, with its slice of the page's flattened text. */
-interface Run {
+export interface Run {
   start: number
   end: number
   str: string
@@ -19,7 +19,7 @@ interface Run {
   height: number
 }
 
-interface PageText {
+export interface PageText {
   text: string
   runs: Run[]
 }
@@ -43,7 +43,7 @@ export interface HighlightRect {
 
 /** 2×3 affine matrix multiply — pdf.js's Util.transform, inlined to avoid
  *  depending on an internal export. */
-function mul(a: number[], b: number[]): number[] {
+export function mul(a: number[], b: number[]): number[] {
   return [
     a[0] * b[0] + a[2] * b[1],
     a[1] * b[0] + a[3] * b[1],
@@ -54,7 +54,14 @@ function mul(a: number[], b: number[]): number[] {
   ]
 }
 
-async function getPageText(page: PDFPageProxy, cache: TextCache, no: number): Promise<PageText> {
+/**
+ * Page text, cached. The key is taken from the proxy itself, never from a page
+ * number the caller passes in: a caller whose page state has advanced ahead of
+ * its page proxy would otherwise cache the wrong page's text under the new
+ * number, and every later read would return it. (That bug was real.)
+ */
+export async function getPageText(page: PDFPageProxy, cache: TextCache): Promise<PageText> {
+  const no = page.pageNumber
   const hit = cache.get(no)
   if (hit) return hit
 
@@ -125,7 +132,7 @@ export async function* searchBook(
     const no = ((from - 1 + i) % total) + 1
     let pt: PageText
     try {
-      pt = await getPageText(await doc.getPage(no), cache, no)
+      pt = await getPageText(await doc.getPage(no), cache)
     } catch {
       continue // unreadable page; keep going
     }
@@ -157,7 +164,6 @@ export async function* searchBook(
  */
 export async function matchRectsOnPage(
   page: PDFPageProxy,
-  no: number,
   query: string,
   cache: TextCache,
   cssScale: number,
@@ -165,39 +171,93 @@ export async function matchRectsOnPage(
 ): Promise<HighlightRect[]> {
   const needle = normalize(query.trim())
   if (needle.length < 2) return []
-  const pt = await getPageText(page, cache, no)
+  const pt = await getPageText(page, cache)
   const hay = normalize(pt.text)
-
-  const full = page.getViewport({ scale: cssScale })
-  const viewport = crop
-    ? page.getViewport({
-        scale: cssScale,
-        offsetX: -crop.fx * full.width,
-        offsetY: -crop.fy * full.height,
-      })
-    : full
 
   const rects: HighlightRect[] = []
   for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + needle.length)) {
-    const end = at + needle.length
-    // A match can span several runs; box the overlapping slice of each.
-    for (const run of pt.runs) {
-      if (run.end <= at || run.start >= end) continue
-      const m = mul(viewport.transform, run.transform)
-      const fontHeight = Math.hypot(m[2], m[3])
-      const runWidth = run.width * cssScale
-      // Character offsets within the run, as fractions of its width. Proportional
-      // spacing makes this an approximation; it's a highlight, not a caret.
-      const n = run.str.length || 1
-      const f0 = (Math.max(at, run.start) - run.start) / n
-      const f1 = (Math.min(end, run.end) - run.start) / n
-      rects.push({
-        left: m[4] + runWidth * f0,
-        top: m[5] - fontHeight,
-        width: Math.max(2, runWidth * (f1 - f0)),
-        height: fontHeight * 1.15,
-      })
-    }
+    rects.push(...rangeRects(page, pt, at, at + needle.length, cssScale, crop))
   }
   return rects
+}
+
+/**
+ * The same viewport pdf.js rendered with, so overlays land on the glyphs. Both
+ * the crop offset and the scale must match the reader's render exactly.
+ */
+export function textViewport(page: PDFPageProxy, cssScale: number, crop?: CropBox | null) {
+  const full = page.getViewport({ scale: cssScale })
+  if (!crop) return full
+  return page.getViewport({
+    scale: cssScale,
+    offsetX: -crop.fx * full.width,
+    offsetY: -crop.fy * full.height,
+  })
+}
+
+/** Boxes covering [start,end) of a page's flattened text, in CSS px. */
+export function rangeRects(
+  page: PDFPageProxy,
+  pt: PageText,
+  start: number,
+  end: number,
+  cssScale: number,
+  crop?: CropBox | null,
+): HighlightRect[] {
+  const viewport = textViewport(page, cssScale, crop)
+  const rects: HighlightRect[] = []
+  // A range can span several runs; box the overlapping slice of each.
+  for (const run of pt.runs) {
+    if (run.end <= start || run.start >= end) continue
+    const m = mul(viewport.transform, run.transform)
+    const fontHeight = Math.hypot(m[2], m[3])
+    const runWidth = run.width * cssScale
+    // Character offsets within the run, as fractions of its width. Proportional
+    // spacing makes this an approximation; it's a highlight, not a caret.
+    const n = run.str.length || 1
+    const f0 = (Math.max(start, run.start) - run.start) / n
+    const f1 = (Math.min(end, run.end) - run.start) / n
+    rects.push({
+      left: m[4] + runWidth * f0,
+      top: m[5] - fontHeight,
+      width: Math.max(2, runWidth * (f1 - f0)),
+      height: fontHeight * 1.15,
+    })
+  }
+  return rects
+}
+
+/** Where each run sits on the rendered page — the text layer's geometry. */
+export interface RunBox {
+  run: Run
+  left: number
+  top: number
+  width: number
+  fontHeight: number
+  angle: number
+}
+
+export async function runBoxes(
+  page: PDFPageProxy,
+  cache: TextCache,
+  cssScale: number,
+  crop?: CropBox | null,
+): Promise<{ pt: PageText; boxes: RunBox[] }> {
+  const pt = await getPageText(page, cache)
+  const viewport = textViewport(page, cssScale, crop)
+  const boxes = pt.runs
+    .filter((r) => r.str.length > 0)
+    .map((run) => {
+      const m = mul(viewport.transform, run.transform)
+      const fontHeight = Math.hypot(m[2], m[3])
+      return {
+        run,
+        left: m[4],
+        top: m[5] - fontHeight,
+        width: run.width * cssScale,
+        fontHeight,
+        angle: Math.atan2(m[1], m[0]),
+      }
+    })
+  return { pt, boxes }
 }

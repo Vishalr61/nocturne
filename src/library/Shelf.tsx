@@ -4,6 +4,7 @@ import {
   bookmarkCounts,
   deleteBook,
   exportLibrary,
+  highlightCounts,
   importLibrary,
   isPersisted,
   listBooks,
@@ -52,16 +53,20 @@ export function Shelf({ onOpen }: ShelfProps) {
   const editRef = useRef<HTMLInputElement | null>(null)
 
   const refresh = useCallback(async () => {
-    const [bs, ps, est, persisted, marks] = await Promise.all([
+    const [bs, ps, est, persisted, bm, hl] = await Promise.all([
       listBooks(),
       allProgress(),
       storageEstimate(),
       isPersisted(),
       bookmarkCounts(),
+      highlightCounts(),
     ])
     setBooks(bs)
     setProgress(ps)
-    setMarks(marks)
+    // One badge for "you've marked this book up", bookmarks + highlights.
+    const total: Record<string, number> = { ...bm }
+    for (const [id, n] of Object.entries(hl)) total[id] = (total[id] ?? 0) + n
+    setMarks(total)
     setDurable(persisted)
     if (est && est.quota > 0) {
       setStorage(`${fmtBytes(est.used)} of ${fmtBytes(est.quota)} used`)
