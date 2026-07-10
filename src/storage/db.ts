@@ -46,11 +46,23 @@ export interface PendingTitle {
   title: string
 }
 
+/** A page you marked. `note` is optional; the id is bookId:page (one per page). */
+export interface Bookmark {
+  id: string
+  bookId: string
+  page: number
+  note?: string
+  createdAt: number
+}
+
+export const bookmarkId = (bookId: string, page: number) => `${bookId}:${page}`
+
 const db = new Dexie('nocturne') as Dexie & {
   books: EntityTable<Book, 'id'>
   profiles: EntityTable<Profile, 'bookId'>
   progress: EntityTable<Progress, 'bookId'>
   pendingTitles: EntityTable<PendingTitle, 'bookId'>
+  bookmarks: EntityTable<Bookmark, 'id'>
 }
 
 db.version(1).stores({
@@ -66,6 +78,14 @@ db.version(2).stores({
   pendingTitles: 'bookId',
 })
 
+db.version(3).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+})
+
 export async function addBook(book: Book): Promise<void> {
   await db.books.put(book)
 }
@@ -78,9 +98,29 @@ export async function getBook(id: string): Promise<Book | undefined> {
   return db.books.get(id)
 }
 
-/** Remove a book and everything known about it (bytes, look, position). */
+/** Remove a book and everything known about it (bytes, look, position, marks). */
 export async function deleteBook(id: string): Promise<void> {
-  await Promise.all([db.books.delete(id), db.profiles.delete(id), db.progress.delete(id)])
+  await Promise.all([
+    db.books.delete(id),
+    db.profiles.delete(id),
+    db.progress.delete(id),
+    db.bookmarks.where('bookId').equals(id).delete(),
+  ])
+}
+
+// --- bookmarks ----------------------------------------------------------------
+
+export async function listBookmarks(bookId: string): Promise<Bookmark[]> {
+  const rows = await db.bookmarks.where('bookId').equals(bookId).toArray()
+  return rows.sort((a, b) => a.page - b.page)
+}
+
+export async function addBookmark(bookId: string, page: number, note?: string): Promise<void> {
+  await db.bookmarks.put({ id: bookmarkId(bookId, page), bookId, page, note, createdAt: Date.now() })
+}
+
+export async function removeBookmark(bookId: string, page: number): Promise<void> {
+  await db.bookmarks.delete(bookmarkId(bookId, page))
 }
 
 export async function touchBook(id: string): Promise<void> {
@@ -190,13 +230,16 @@ export interface LibraryBackup {
   books: { id: string; title: string; pageCount: number; size: number; addedAt: number }[]
   profiles: Profile[]
   progress: Progress[]
+  /** Optional so backups written before bookmarks existed still restore. */
+  bookmarks?: Bookmark[]
 }
 
 export async function exportLibrary(): Promise<LibraryBackup> {
-  const [books, profiles, progress] = await Promise.all([
+  const [books, profiles, progress, bookmarks] = await Promise.all([
     db.books.toArray(),
     db.profiles.toArray(),
     db.progress.toArray(),
+    db.bookmarks.toArray(),
   ])
   return {
     version: 1,
@@ -210,6 +253,7 @@ export async function exportLibrary(): Promise<LibraryBackup> {
     })),
     profiles,
     progress,
+    bookmarks,
   }
 }
 
@@ -228,6 +272,7 @@ export async function importLibrary(backup: LibraryBackup): Promise<RestoreResul
   // restored whether or not the bytes are present — a later re-add finds them.
   await db.profiles.bulkPut(backup.profiles ?? [])
   await db.progress.bulkPut(backup.progress ?? [])
+  await db.bookmarks.bulkPut(backup.bookmarks ?? [])
 
   const here = new Set((await db.books.toArray()).map((b) => b.id))
   let matched = 0

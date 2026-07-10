@@ -26,13 +26,17 @@ import {
 } from '../engine/search'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
+  addBookmark,
   getBook,
   getProfile,
   getProgress,
+  listBookmarks,
+  removeBookmark,
   saveProfile,
   saveProgress,
   saveThumb,
   touchBook,
+  type Bookmark,
 } from '../storage/db'
 
 // The reader: a saved book, recolored crisply on a canvas. Phone-first:
@@ -97,6 +101,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** The query whose matches are highlighted on the page (survives closing the panel). */
   const [highlightQuery, setHighlightQuery] = useState('')
   const [highlights, setHighlights] = useState<HighlightRect[]>([])
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
@@ -120,6 +125,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     let alive = true
     setBusy(true)
     setToc([]) // don't show the previous book's contents while loading
+    setBookmarks([])
     setCropBox(null)
     clsCacheRef.current.clear()
     textCacheRef.current.clear()
@@ -144,6 +150,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       setPageCount(doc.numPages)
       void loadOutline(doc).then((items) => {
         if (alive) setToc(items)
+      })
+      void listBookmarks(bookId).then((bs) => {
+        if (alive) setBookmarks(bs)
       })
       // Detect the book's shared content box in the background; when it lands,
       // the page re-fits with the margins cropped away.
@@ -600,6 +609,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, showSearch, docVersion])
 
+  // --- bookmarks ----------------------------------------------------------------
+  const marked = bookmarks.some((b) => b.page === page)
+
+  const toggleBookmark = useCallback(async () => {
+    const id = loadedIdRef.current
+    if (!id) return
+    if (bookmarks.some((b) => b.page === page)) await removeBookmark(id, page)
+    else await addBookmark(id, page)
+    setBookmarks(await listBookmarks(id))
+  }, [bookmarks, page])
+
+  const dropBookmark = useCallback(async (p: number) => {
+    const id = loadedIdRef.current
+    if (!id) return
+    await removeBookmark(id, p)
+    setBookmarks(await listBookmarks(id))
+  }, [])
+
   const openHit = useCallback((hit: SearchHit, q: string) => {
     setHighlightQuery(q)
     setPage(hit.page)
@@ -656,6 +683,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
             {pageCount ? `${page} / ${pageCount}` : '—'}
           </span>
+          <button
+            aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
+            className="rounded-[10px] border px-2.5 py-1 text-sm transition-opacity hover:opacity-100"
+            style={{
+              borderColor: marked ? '#c9a56a' : hairline,
+              color: marked ? '#c9a56a' : 'inherit',
+              opacity: marked ? 1 : 0.8,
+            }}
+            onClick={() => void toggleBookmark()}
+          >
+            {marked ? '★' : '☆'}
+          </button>
           <button
             aria-label="Search in book"
             className="rounded-[10px] border px-2.5 py-1 text-sm opacity-80 transition-opacity hover:opacity-100"
@@ -780,7 +819,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {pageCount ? `${Math.round((page / pageCount) * 100)}%` : ''}
           </span>
 
-          {toc.length > 0 && (
+          {(toc.length > 0 || bookmarks.length > 0) && (
             <button
               className="whitespace-nowrap text-[13px] opacity-70 transition-opacity hover:opacity-100"
               onClick={() => setShowToc(true)}
@@ -1006,6 +1045,42 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </button>
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-auto px-3 pb-8">
+            {bookmarks.length > 0 && (
+              <>
+                <div className="px-3 pb-2 pt-1 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Bookmarks
+                </div>
+                {bookmarks.map((b) => (
+                  <div key={b.id} className="group flex items-center gap-1">
+                    <button
+                      className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
+                      onClick={() => {
+                        setPage(b.page)
+                        setShowToc(false)
+                      }}
+                    >
+                      <span className="truncate font-serif text-[15px] text-ink-shelf">
+                        <span className="mr-2 text-accent">★</span>
+                        {b.note || `Page ${b.page}`}
+                      </span>
+                      <span className="text-sm tabular-nums text-ink-dim">{b.page}</span>
+                    </button>
+                    <button
+                      aria-label={`Remove bookmark on page ${b.page}`}
+                      className="rounded-md px-2 py-1 text-xs text-ink-faint hover:text-ink-body"
+                      onClick={() => void dropBookmark(b.page)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                {toc.length > 0 && (
+                  <div className="px-3 pb-2 pt-5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Chapters
+                  </div>
+                )}
+              </>
+            )}
             {toc.map((t, i) => (
               <button
                 key={i}
