@@ -1,5 +1,5 @@
 import type { PDFPageProxy } from 'pdfjs-dist'
-import { clampRenderDpr, renderPageToCanvas } from './pdf'
+import { clampRenderDpr, renderPageToCanvas, type CropBox } from './pdf'
 import { classifyPage, type PageClassification, type Rect } from './classify'
 import { Recolorizer } from './recolor'
 import type { Theme } from './theme'
@@ -29,6 +29,10 @@ export interface DarkPageOptions {
   imageDim?: number
   /** Reuse this canvas as the pdf.js render target across calls (memory churn). */
   sourceCanvas?: HTMLCanvasElement
+  /** Render only this page region (margin auto-crop). */
+  crop?: CropBox | null
+  /** Pre-computed classification; skips classifying again (reader caches these). */
+  cls?: PageClassification
 }
 
 export interface DarkPageResult {
@@ -64,18 +68,42 @@ export async function renderDarkPage(
 ): Promise<DarkPageResult> {
   // Clamp here, in the shared pipeline, so no caller (reader zoom, export DPI)
   // can ever ask for a canvas iOS will refuse or be killed for.
-  const safeDpr = clampRenderDpr(page, cssScale, dpr)
-  const [source, cls] = await Promise.all([
-    renderPageToCanvas(page, cssScale, safeDpr, opts.sourceCanvas),
-    classifyPage(page),
-  ])
+  const safeDpr = clampRenderDpr(page, cssScale, dpr, opts.crop)
+  let source: HTMLCanvasElement
+  let cls: PageClassification
+  if (opts.cls) {
+    cls = opts.cls
+    source = await renderPageToCanvas(page, cssScale, safeDpr, opts.sourceCanvas, opts.crop)
+  } else {
+    ;[source, cls] = await Promise.all([
+      renderPageToCanvas(page, cssScale, safeDpr, opts.sourceCanvas, opts.crop),
+      classifyPage(page),
+    ])
+  }
+  return finishDarkPage(page, source, cls, cssScale * safeDpr, safeDpr, recolor, opts)
+}
 
+/**
+ * The recolor half of renderDarkPage, callable on an already-rendered source.
+ * The reader's prefetch and slider paths use this to skip the expensive pdf.js
+ * render: a prefetched page turn or a theme/brightness tweak is then just the
+ * cheap GPU pass.
+ */
+export function finishDarkPage(
+  page: PDFPageProxy,
+  source: HTMLCanvasElement,
+  cls: PageClassification,
+  renderScale: number,
+  dprUsed: number,
+  recolor: Recolorizer,
+  opts: DarkPageOptions,
+): DarkPageResult {
   const inkFlip = dominantLuma(source) >= DARK_PAGE_LUMA
   const colorText = cls.kind === 'digital-text' && cls.imageRects.length === 0
 
   let mask: HTMLCanvasElement | null = null
   if (inkFlip) {
-    const declared = declaredImageRects(page, cls.imageRects, cssScale * safeDpr, source)
+    const declared = declaredImageRects(page, cls.imageRects, renderScale, source, opts.crop)
     const found = contentPhotoRects(source)
     mask = paintMask([...declared, ...found], source.width, source.height)
   }
@@ -89,7 +117,7 @@ export async function renderDarkPage(
     mask,
     imageDim: opts.imageDim ?? IMAGE_DIM,
   })
-  return { source, cls, inkFlipped: inkFlip, dpr: safeDpr }
+  return { source, cls, inkFlipped: inkFlip, dpr: dprUsed }
 }
 
 /**
@@ -141,10 +169,21 @@ function declaredImageRects(
   rects: Rect[],
   renderScale: number,
   source: HTMLCanvasElement,
+  crop?: CropBox | null,
 ): PxRect[] {
   if (!rects.length) return []
-  const viewport = page.getViewport({ scale: renderScale })
-  const pageArea = source.width * source.height
+  const full = page.getViewport({ scale: renderScale })
+  // The same offset viewport the render used, so rects land on cropped pixels.
+  const viewport = crop
+    ? page.getViewport({
+        scale: renderScale,
+        offsetX: -crop.fx * full.width,
+        offsetY: -crop.fy * full.height,
+      })
+    : full
+  // "Embedded" is judged against the FULL page area — cropping the margins
+  // must not reclassify a half-page image as full-page.
+  const pageArea = full.width * full.height
   return rects
     .map((r) => {
       const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([r.x, r.y, r.x + r.w, r.y + r.h])

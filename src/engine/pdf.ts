@@ -24,11 +24,26 @@ export async function openPdf(data: ArrayBuffer): Promise<PDFDocumentProxy> {
 const MAX_CANVAS_PIXELS = 16_000_000
 const MAX_CANVAS_DIM = 8192
 
+/** A content region of a page, as fractions (0..1) of the full rendered page. */
+export interface CropBox {
+  fx: number
+  fy: number
+  fw: number
+  fh: number
+}
+
 /** Largest dpr ≤ `dpr` whose render of this page fits the canvas budget. */
-export function clampRenderDpr(page: PDFPageProxy, cssScale: number, dpr: number): number {
+export function clampRenderDpr(
+  page: PDFPageProxy,
+  cssScale: number,
+  dpr: number,
+  crop?: CropBox | null,
+): number {
   const vp = page.getViewport({ scale: cssScale * dpr })
-  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (vp.width * vp.height))
-  const byDim = MAX_CANVAS_DIM / Math.max(vp.width, vp.height)
+  const w = vp.width * (crop?.fw ?? 1)
+  const h = vp.height * (crop?.fh ?? 1)
+  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (w * h))
+  const byDim = MAX_CANVAS_DIM / Math.max(w, h)
   return dpr * Math.min(1, byArea, byDim)
 }
 
@@ -37,18 +52,28 @@ export function clampRenderDpr(page: PDFPageProxy, cssScale: number, dpr: number
  * device pixel ratio. This canvas is the *source texture* for the recolor pass —
  * re-rendered fresh at every zoom so text stays vector-crisp, never a scaled bitmap.
  * Pass `into` to reuse one canvas across renders (page turns would otherwise churn
- * ~100 MB allocations on a phone).
+ * ~100 MB allocations on a phone). Pass `crop` to render only that region of the
+ * page — the viewport offset shifts the content so the canvas IS the crop, which
+ * is how margin auto-crop gets bigger text without scaling a bitmap.
  */
 export async function renderPageToCanvas(
   page: PDFPageProxy,
   cssScale: number,
   dpr = Math.min(window.devicePixelRatio || 1, 3),
   into?: HTMLCanvasElement,
+  crop?: CropBox | null,
 ): Promise<HTMLCanvasElement> {
-  const viewport = page.getViewport({ scale: cssScale * dpr })
+  const full = page.getViewport({ scale: cssScale * dpr })
+  const viewport = crop
+    ? page.getViewport({
+        scale: cssScale * dpr,
+        offsetX: -crop.fx * full.width,
+        offsetY: -crop.fy * full.height,
+      })
+    : full
   const canvas = into ?? document.createElement('canvas')
-  canvas.width = Math.ceil(viewport.width) // assigning width also clears a reused canvas
-  canvas.height = Math.ceil(viewport.height)
+  canvas.width = Math.ceil(full.width * (crop?.fw ?? 1)) // assigning width also clears a reused canvas
+  canvas.height = Math.ceil(full.height * (crop?.fh ?? 1))
   const ctx = canvas.getContext('2d', { willReadFrequently: false })!
   await page.render({ canvasContext: ctx, viewport }).promise
   return canvas

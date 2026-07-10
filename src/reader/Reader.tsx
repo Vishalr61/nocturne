@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { openPdf, type PDFDocumentProxy } from '../engine/pdf'
+import {
+  clampRenderDpr,
+  openPdf,
+  renderPageToCanvas,
+  type CropBox,
+  type PDFDocumentProxy,
+  type PDFPageProxy,
+} from '../engine/pdf'
 import { Recolorizer } from '../engine/recolor'
 import { THEMES, themeById, DEFAULT_THEME } from '../engine/theme'
-import { generateThumbnail, renderDarkPage } from '../engine/pipeline'
-import type { PageClassification } from '../engine/classify'
+import {
+  finishDarkPage,
+  generateThumbnail,
+  renderDarkPage,
+  type DarkPageResult,
+} from '../engine/pipeline'
+import { classifyPage, type PageClassification } from '../engine/classify'
+import { detectContentBox } from '../engine/crop'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   getBook,
@@ -33,9 +46,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const recolorRef = useRef<Recolorizer | null>(null)
-  // One offscreen canvas reused for every pdf.js render: page turns on a phone
-  // would otherwise allocate (and leave for GC) tens of MB per turn.
+  // Two offscreen canvases, ping-ponged: one holds the displayed page's pdf.js
+  // render, the other receives the prefetched next page. Reusing them keeps
+  // page turns from allocating (and leaving for GC) tens of MB per turn.
   const sourceRef = useRef<HTMLCanvasElement | null>(null)
+  const spareCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  /** What sourceRef currently holds; lets theme/slider changes skip pdf.js. */
+  const sourceMetaRef = useRef<CachedSource | null>(null)
+  /** The pre-rendered next page; a forward turn consumes it (instant turn). */
+  const prefetchRef = useRef<(CachedSource & { canvas: HTMLCanvasElement }) | null>(null)
+  /** Classification is scale-independent; classify each page once per doc. */
+  const clsCacheRef = useRef(new Map<string, PageClassification>())
   const docRef = useRef<PDFDocumentProxy | null>(null)
   const loadedIdRef = useRef<string | null>(null)
 
@@ -55,6 +76,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
+  /** Doc-level content box for margin auto-crop; null until detected (or never). */
+  const [cropBox, setCropBox] = useState<CropBox | null>(null)
+  const [cropMargins, setCropMargins] = useState(true)
   // The page number field edits as free text so typing "150" doesn't jump to
   // page 1 then 15; it commits whenever the text is a valid page.
   const [pageStr, setPageStr] = useState('1')
@@ -75,6 +99,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     let alive = true
     setBusy(true)
     setToc([]) // don't show the previous book's contents while loading
+    setCropBox(null)
+    clsCacheRef.current.clear()
+    prefetchRef.current = null
+    sourceMetaRef.current = null
     void (async () => {
       const book = await getBook(bookId)
       if (!book) {
@@ -93,6 +121,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       void loadOutline(doc).then((items) => {
         if (alive) setToc(items)
       })
+      // Detect the book's shared content box in the background; when it lands,
+      // the page re-fits with the margins cropped away.
+      void detectContentBox(doc).then((box) => {
+        if (alive && docRef.current === doc) setCropBox(box)
+      })
 
       const [profile, progress] = await Promise.all([getProfile(bookId), getProgress(bookId)])
       if (!alive) return
@@ -100,6 +133,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setThemeId(profile.themeId)
         setImageDim(profile.imageDim ?? 0.82)
         setZoom(profile.zoom)
+        setCropMargins(profile.cropMargins ?? true)
       }
       setPage(progress?.page ?? 1)
       setDocVersion((v) => v + 1)
@@ -122,15 +156,30 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId])
 
+  // Classification is per page and scale-independent; cache it for the doc.
+  const classifyCached = useCallback(
+    async (pdfPage: PDFPageProxy, pageNo: number): Promise<PageClassification> => {
+      const key = `${docVersion}:${pageNo}`
+      const hit = clsCacheRef.current.get(key)
+      if (hit) return hit
+      const cls = await classifyPage(pdfPage)
+      clsCacheRef.current.set(key, cls)
+      return cls
+    },
+    [docVersion],
+  )
+
   // --- render the current page ----------------------------------------------
   const draw = useCallback(async () => {
     const doc = docRef.current
     const canvas = canvasRef.current
+    const scroller = containerRef.current
     if (!doc || !canvas) return
     if (!recolorRef.current) recolorRef.current = new Recolorizer(canvas)
     if (!sourceRef.current) sourceRef.current = document.createElement('canvas')
 
     const pdfPage = await doc.getPage(page)
+    const cls = await classifyCached(pdfPage, page)
 
     // Fit-page base scale: at zoom=1 the whole page is visible — width-bound on
     // phones (same as the old fit-width), usually height-bound on landscape
@@ -139,28 +188,84 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // 1 device pixel — the browser never rescales the render (that rescale = blur).
     const dpr = Math.min(window.devicePixelRatio || 1, 3)
     const pageVp = pdfPage.getViewport({ scale: 1 })
-    const scroller = containerRef.current
-    const availW = scroller ? scroller.clientWidth - 16 : pageVp.width // p-2 padding
-    const availH = scroller ? scroller.clientHeight - 16 : pageVp.height
-    const cssScale =
-      Math.max(0.1, Math.min(availW / pageVp.width, availH / pageVp.height)) * zoom
+    // Margin crop applies to the fit, but never to full-bleed pages (covers,
+    // photo plates) — slicing their edges is worse than small margins.
+    const crop = cropMargins && !isFullBleed(cls, pageVp) ? cropBox : null
+    const effW = pageVp.width * (crop?.fw ?? 1)
+    const effH = pageVp.height * (crop?.fh ?? 1)
+    const availW = scroller ? scroller.clientWidth - 16 : effW // p-2 padding
+    const availH = scroller ? scroller.clientHeight - 16 : effH
+    const cssScale = Math.max(0.1, Math.min(availW / effW, availH / effH)) * zoom
 
-    // The pipeline decides polarity, image masking, and colour-text handling
-    // per page, then draws the recolored result into our canvas. It may clamp
-    // the dpr to keep the canvas inside iOS's memory budget (extreme zoom).
-    const { source, cls: classification, dpr: renderedDpr } = await renderDarkPage(
-      pdfPage,
-      cssScale,
-      dpr,
-      recolorRef.current,
-      { theme: themeById(themeId), satCut: SAT_CUT, imageDim, sourceCanvas: sourceRef.current },
-    )
-    setCls(classification)
+    const opts = { theme: themeById(themeId), satCut: SAT_CUT, imageDim, crop }
+    const matches = (m: CachedSource): boolean =>
+      m.pageNo === page &&
+      m.docVersion === docVersion &&
+      m.dpr === dpr &&
+      m.crop === crop &&
+      Math.abs(m.cssScale - cssScale) < 1e-6
+
+    // Three paths, cheapest first. The pipeline decides polarity, image
+    // masking, and colour-text handling per page either way; it may clamp the
+    // dpr to keep the canvas inside iOS's memory budget (extreme zoom).
+    const meta = sourceMetaRef.current
+    const pf = prefetchRef.current
+    let result: DarkPageResult
+    if (meta && matches(meta) && sourceRef.current.width > 0) {
+      // Same source pixels (theme/brightness tweak, GL context recovery):
+      // GPU recolor only, no pdf.js render.
+      result = finishDarkPage(
+        pdfPage,
+        sourceRef.current,
+        meta.cls,
+        cssScale * meta.safeDpr,
+        meta.safeDpr,
+        recolorRef.current,
+        opts,
+      )
+    } else if (pf && matches(pf)) {
+      // Prefetched while reading the previous page: swap canvases and recolor.
+      // This is what makes forward page turns feel instant.
+      prefetchRef.current = null
+      spareCanvasRef.current = sourceRef.current
+      sourceRef.current = pf.canvas
+      sourceMetaRef.current = {
+        pageNo: pf.pageNo,
+        cssScale: pf.cssScale,
+        dpr: pf.dpr,
+        docVersion: pf.docVersion,
+        crop: pf.crop,
+        cls: pf.cls,
+        safeDpr: pf.safeDpr,
+      }
+      result = finishDarkPage(
+        pdfPage,
+        pf.canvas,
+        pf.cls,
+        cssScale * pf.safeDpr,
+        pf.safeDpr,
+        recolorRef.current,
+        opts,
+      )
+    } else {
+      const full = { ...opts, cls, sourceCanvas: sourceRef.current }
+      try {
+        result = await renderDarkPage(pdfPage, cssScale, dpr, recolorRef.current, full)
+      } catch {
+        // Transient render collisions (background crop detection touching the
+        // same page) resolve on retry; a second failure surfaces to the chain.
+        await new Promise((r) => setTimeout(r, 250))
+        result = await renderDarkPage(pdfPage, cssScale, dpr, recolorRef.current, full)
+      }
+      sourceMetaRef.current = { pageNo: page, cssScale, dpr, docVersion, crop, cls, safeDpr: result.dpr }
+    }
+
+    setCls(result.cls)
     // Display exactly at render resolution; when zoom > 1 the canvas overflows
     // the container and overflow-auto provides panning. If the dpr was clamped,
     // the CSS size still honours the requested zoom (slightly soft beats a crash).
-    canvas.style.width = `${source.width / renderedDpr}px`
-    canvas.style.height = `${source.height / renderedDpr}px`
+    canvas.style.width = `${result.source.width / result.dpr}px`
+    canvas.style.height = `${result.source.height / result.dpr}px`
     canvas.style.transform = '' // clear any live pinch preview
 
     // Keep the pinch focal point where the fingers ended: measure the freshly
@@ -173,7 +278,50 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       scroller.scrollLeft += rect.left + commit.scale * commit.px - commit.mx
       scroller.scrollTop += rect.top + commit.scale * commit.py - commit.my
     }
-  }, [page, zoom, themeId, imageDim, docVersion])
+  }, [page, zoom, themeId, imageDim, docVersion, cropBox, cropMargins, classifyCached])
+
+  // Pre-render the next page into the spare canvas while the current one is
+  // read, so a forward turn is just a canvas swap + GPU recolor. Runs on the
+  // draw chain (after the draw it follows), so it never races the shared
+  // canvases, and a newer draw supersedes it before it starts.
+  const prefetchNext = useCallback(async () => {
+    const doc = docRef.current
+    const scroller = containerRef.current
+    if (!doc || !scroller) return
+    const nextNo = page + 1
+    if (nextNo > doc.numPages) return
+    try {
+      const nextPage = await doc.getPage(nextNo)
+      const cls = await classifyCached(nextPage, nextNo)
+      const dpr = Math.min(window.devicePixelRatio || 1, 3)
+      const vp = nextPage.getViewport({ scale: 1 })
+      const crop = cropMargins && !isFullBleed(cls, vp) ? cropBox : null
+      const effW = vp.width * (crop?.fw ?? 1)
+      const effH = vp.height * (crop?.fh ?? 1)
+      const cssScale =
+        Math.max(
+          0.1,
+          Math.min((scroller.clientWidth - 16) / effW, (scroller.clientHeight - 16) / effH),
+        ) * zoom
+      const pf = prefetchRef.current
+      if (
+        pf &&
+        pf.pageNo === nextNo &&
+        pf.docVersion === docVersion &&
+        pf.dpr === dpr &&
+        pf.crop === crop &&
+        Math.abs(pf.cssScale - cssScale) < 1e-6
+      ) {
+        return // already prefetched at these exact settings
+      }
+      const safeDpr = clampRenderDpr(nextPage, cssScale, dpr, crop)
+      if (!spareCanvasRef.current) spareCanvasRef.current = document.createElement('canvas')
+      const canvas = await renderPageToCanvas(nextPage, cssScale, safeDpr, spareCanvasRef.current, crop)
+      prefetchRef.current = { pageNo: nextNo, cssScale, dpr, docVersion, crop, cls, safeDpr, canvas }
+    } catch {
+      /* prefetch is best-effort */
+    }
+  }, [page, zoom, docVersion, cropBox, cropMargins, classifyCached])
 
   // Draws are serialized: pdf.js render and the GL pass each reuse one canvas,
   // and two in-flight draws would interleave into garbage. Rapid page turns
@@ -184,8 +332,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const seq = ++drawSeqRef.current
     drawChainRef.current = drawChainRef.current
       .then(() => (seq === drawSeqRef.current ? draw() : undefined))
+      .then(() => (seq === drawSeqRef.current ? prefetchNext() : undefined))
       .catch(() => undefined) // a failed draw must not stall the chain
-  }, [draw])
+  }, [draw, prefetchNext])
 
   useEffect(() => {
     enqueueDraw()
@@ -318,14 +467,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     const id = loadedIdRef.current
     if (!id) return
-    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim })
+    void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins })
     void saveProgress({
       bookId: id,
       page,
       percent: pageCount ? page / pageCount : 0,
       updatedAt: Date.now(),
     })
-  }, [themeId, imageDim, zoom, page, pageCount])
+  }, [themeId, imageDim, zoom, page, pageCount, cropMargins])
 
   const turn = (delta: number) =>
     setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
@@ -469,6 +618,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             />
           </label>
 
+          {cropBox && (
+            <label className="flex items-center gap-1.5 text-neutral-400">
+              <input
+                type="checkbox"
+                checked={cropMargins}
+                onChange={(e) => setCropMargins(e.target.checked)}
+              />
+              Crop
+            </label>
+          )}
+
           <label className="flex items-center gap-2 text-neutral-400">
             Zoom
             <input
@@ -530,6 +690,25 @@ interface TocItem {
   title: string
   page: number
   depth: number
+}
+
+/** Everything that pins a rendered source canvas to specific settings. */
+interface CachedSource {
+  pageNo: number
+  cssScale: number
+  dpr: number
+  docVersion: number
+  crop: CropBox | null
+  cls: PageClassification
+  safeDpr: number
+}
+
+/** A page that IS an image (cover, scan, photo plate) must never be cropped. */
+function isFullBleed(cls: PageClassification, vp: { width: number; height: number }): boolean {
+  return (
+    cls.kind === 'scanned' ||
+    cls.imageRects.some((r) => r.w * r.h >= 0.85 * vp.width * vp.height)
+  )
 }
 
 interface OutlineNode {

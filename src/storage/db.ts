@@ -25,6 +25,8 @@ export interface Profile {
   zoom: number
   /** Brightness of preserved images against the dark page, 0.4..1. */
   imageDim?: number
+  /** Crop the document's shared page margins so content fills the screen. */
+  cropMargins?: boolean
 }
 
 export interface Progress {

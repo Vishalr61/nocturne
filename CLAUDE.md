@@ -89,11 +89,14 @@ src/
 │   ├── shader.ts     GLSL: ink/paper remap + polarity/mask/colour-text uniforms
 │   ├── recolor.ts    Recolorizer: WebGL2 pass, source canvas -> recolored canvas
 │   ├── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
-│   └── pipeline.ts   renderDarkPage: polarity, image masking, colour text —
-│                     the per-page decisions; shared by reader AND export
+│   ├── crop.ts       detectContentBox: doc-level margin box for auto-crop
+│   └── pipeline.ts   renderDarkPage (+finishDarkPage for pre-rendered sources):
+│                     polarity, image masking, colour text — the per-page
+│                     decisions; shared by reader AND export
 ├── storage/db.ts     Dexie: books (bytes+thumb), profiles, progress. Local only.
 ├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
-└── reader/Reader.tsx recolor, tap zones (turn/immersive), pinch zoom; persists per book
+└── reader/Reader.tsx recolor, tap zones, pinch zoom, nav (scrubber/TOC),
+                      next-page prefetch, margin crop; persists per book
 ```
 
 ## Roadmap (build order)
