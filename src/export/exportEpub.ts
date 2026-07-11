@@ -1,7 +1,14 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { getPageText, type TextCache } from '../engine/search'
-import { reconstructPage, stitch, spansText, type Block, type Span } from '../engine/reflow'
+import {
+  reconstructPage,
+  stitch,
+  spansText,
+  type Block,
+  type TextBlock,
+  type Span,
+} from '../engine/reflow'
 
 // EPUB export — "free the book". Text Mode already reconstructs real
 // paragraphs from the PDF's text layer (engine/reflow.ts); written out as
@@ -25,14 +32,17 @@ function spanHtml(spans: Span[]): string {
 
 interface Chapter {
   title: string
-  blocks: Block[]
+  blocks: TextBlock[]
 }
 
-/** Headings begin chapters; leading blocks before any heading are "front matter". */
+/** Headings begin chapters; leading blocks before any heading are "front matter".
+ *  Image blocks are skipped — this export frees the PROSE; figures stay in the
+ *  PDF exports. */
 function chapterize(blocks: Block[]): Chapter[] {
   const chapters: Chapter[] = []
   let cur: Chapter | null = null
   for (const b of blocks) {
+    if (b.kind === 'img') continue
     if (b.kind === 'h') {
       cur = { title: spansText(b.spans).trim() || `Chapter ${chapters.length + 1}`, blocks: [b] }
       chapters.push(cur)
@@ -82,7 +92,10 @@ export async function exportEpub(
   }
 
   const chapters = chapterize(all)
-  const totalChars = all.reduce((n, b) => n + spansText(b.spans).length, 0)
+  const totalChars = all.reduce(
+    (n, b) => n + (b.kind === 'img' ? 0 : spansText(b.spans).length),
+    0,
+  )
   if (totalChars < 500) {
     throw new Error('This book has no usable text layer (a scan needs OCR first).')
   }

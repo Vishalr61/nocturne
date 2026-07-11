@@ -1986,68 +1986,107 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
-            <button
-              className="w-full rounded-2xl bg-accent py-3.5 text-sm font-semibold text-accent-on transition-colors hover:bg-accent-hi disabled:opacity-50"
-              disabled={!pageCount || exporting !== null}
-              onClick={onExport}
-            >
-              {exporting !== null ? `Exporting ${Math.round(exporting * 100)}%` : 'Export dark PDF'}
-            </button>
+            {/* One labelled menu, one explanation per row — four look-alike
+                buttons in a stack read as noise. */}
+            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+              Export
+            </div>
+            <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <div className="text-[13px] text-ink-body">Dark PDF</div>
+                  <div className="text-[11px] text-ink-faint">
+                    The exact pages in this theme — open in Books
+                  </div>
+                </div>
+                <button
+                  className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi disabled:opacity-50"
+                  disabled={!pageCount || exporting !== null}
+                  onClick={onExport}
+                >
+                  {exporting !== null ? `${Math.round(exporting * 100)}%` : 'Save'}
+                </button>
+              </div>
 
-            {/* Vector beta: rewrites colour operators instead of rasterizing —
-                small file, selectable text. Raster stays until this graduates. */}
-            <button
-              className="mt-3 w-full rounded-2xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-              disabled={!pageCount || vexporting !== null}
-              onClick={() => void onVectorExport()}
-            >
-              {vexporting !== null
-                ? `Vector export ${Math.round(vexporting * 100)}%`
-                : 'Export dark PDF (vector beta)'}
-            </button>
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <div className="text-[13px] text-ink-body">
+                    Dark PDF, vector <span className="text-ink-faint">(beta)</span>
+                  </div>
+                  <div className="text-[11px] text-ink-faint">
+                    Selectable text, much smaller file
+                  </div>
+                </div>
+                <button
+                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+                  disabled={!pageCount || vexporting !== null}
+                  onClick={() => void onVectorExport()}
+                >
+                  {vexporting !== null ? `${Math.round(vexporting * 100)}%` : 'Save'}
+                </button>
+              </div>
 
-            {/* EPUB frees the prose (reflow) — figures and scans stay PDF-only. */}
-            <button
-              className="mt-3 w-full rounded-2xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-              disabled={!pageCount || epubbing !== null}
-              onClick={() => void onEpubExport()}
-            >
-              {epubErr
-                ? 'Needs a text layer (scans need OCR)'
-                : epubbing !== null
-                  ? `EPUB export ${Math.round(epubbing * 100)}%`
-                  : 'Export EPUB (prose beta)'}
-            </button>
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <div className="text-[13px] text-ink-body">
+                    EPUB <span className="text-ink-faint">(beta)</span>
+                  </div>
+                  <div className="text-[11px] text-ink-faint">
+                    {epubErr
+                      ? 'Needs a text layer — scans need OCR'
+                      : 'Reflowed prose for any e-reader'}
+                  </div>
+                </div>
+                <button
+                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+                  disabled={!pageCount || epubbing !== null}
+                  onClick={() => void onEpubExport()}
+                >
+                  {epubbing !== null ? `${Math.round(epubbing * 100)}%` : 'Save'}
+                </button>
+              </div>
 
-            {/* Extract keeps the ORIGINAL pages (colours, text layer) — it's
-                "send chapter 3", not "export the dark theme". */}
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                aria-label="Extract from page"
-                type="number"
-                min={1}
-                max={pageCount || 1}
-                value={extractFrom}
-                onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
-                className="w-16 rounded-xl border border-line bg-inset px-2 py-2.5 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
-              />
-              <span className="text-xs text-ink-soft">to</span>
-              <input
-                aria-label="Extract to page"
-                type="number"
-                min={1}
-                max={pageCount || 1}
-                value={extractTo}
-                onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
-                className="w-16 rounded-xl border border-line bg-inset px-2 py-2.5 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
-              />
-              <button
-                className="flex-1 rounded-xl border border-accent/40 py-2.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-                disabled={!pageCount || extracting}
-                onClick={() => void onExtract()}
-              >
-                {extractErr ? 'Couldn’t extract' : extracting ? 'Extracting…' : 'Extract pages'}
-              </button>
+              <div className="px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[13px] text-ink-body">Extract pages</div>
+                    <div className="text-[11px] text-ink-faint">
+                      {extractErr
+                        ? 'Couldn’t extract from this PDF'
+                        : 'A page range as its own original PDF'}
+                    </div>
+                  </div>
+                  <button
+                    className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+                    disabled={!pageCount || extracting}
+                    onClick={() => void onExtract()}
+                  >
+                    {extracting ? '…' : 'Save'}
+                  </button>
+                </div>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <input
+                    aria-label="Extract from page"
+                    type="number"
+                    min={1}
+                    max={pageCount || 1}
+                    value={extractFrom}
+                    onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
+                    className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                  />
+                  <span className="text-xs text-ink-soft">to</span>
+                  <input
+                    aria-label="Extract to page"
+                    type="number"
+                    min={1}
+                    max={pageCount || 1}
+                    value={extractTo}
+                    onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
+                    className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                  />
+                  <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
+                </div>
+              </div>
             </div>
 
             {cls && (
