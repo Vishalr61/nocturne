@@ -154,8 +154,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const filmChainRef = useRef<Promise<void>>(Promise.resolve())
   const bmpCacheRef = useRef<Map<number, PageBitmap>>(new Map())
   const renderParamsRef = useRef<RenderParams | null>(null)
-  const dragCommitRef = useRef(false)
   const trackRef = useRef<HTMLDivElement | null>(null)
+  // Commit hand-off: the overlay is dropped only once the settle animation has
+  // ended AND the live canvas has re-rendered the committed page, so the two
+  // line up and there's no snap.
+  const commitTargetRef = useRef<number | null>(null)
+  const slideDoneRef = useRef(false)
+  const renderedPageRef = useRef(0)
   /** Classification is scale-independent; classify each page once per doc. */
   const clsCacheRef = useRef(new Map<string, PageClassification>())
   /** Extracted page text, reused by search and highlighting. */
@@ -607,17 +612,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     enqueueDraw()
   }, [enqueueDraw])
 
-  // When a page finishes rendering: if a drag-turn was committing, the new page
-  // is now live under the overlay, so drop it. Then refresh the neighbour
-  // bitmaps for the next drag.
-  useEffect(() => {
-    if (!view) return
-    if (dragCommitRef.current) {
-      dragCommitRef.current = false
+  // The overlay stays until BOTH the settle animation ends and the live canvas
+  // shows the committed page — otherwise a fast re-render yanks the half-slid
+  // filmstrip away and it snaps.
+  const tryFinishDrag = useCallback(() => {
+    if (
+      commitTargetRef.current !== null &&
+      slideDoneRef.current &&
+      renderedPageRef.current === commitTargetRef.current
+    ) {
+      commitTargetRef.current = null
+      slideDoneRef.current = false
       setDrag(null)
     }
+  }, [])
+
+  // When a page finishes rendering: record it, complete a pending drag-commit if
+  // its slide is done, and refresh the neighbour bitmaps for the next drag.
+  useEffect(() => {
+    if (!view) return
+    renderedPageRef.current = view.pageNo
+    tryFinishDrag()
     ensureNeighbors()
-  }, [view, ensureNeighbors])
+  }, [view, ensureNeighbors, tryFinishDrag])
 
   // Refit whenever the container resizes for any reason — rotation, window
   // resize, immersive chrome toggling (that changes the height fit-page uses).
@@ -833,26 +850,36 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     if (!scroller || viewMode !== 'paged' || spreadActive) return
     let x0 = 0
     let y0 = 0
-    let t0 = 0
     let mode: 'idle' | 'maybe' | 'follow' | 'fallback' = 'idle'
     let w = 0
     let dir = 0
+    let lastX = 0
+    let lastT = 0
+    let vx = 0 // px/ms, smoothed — for flick detection and settle speed
+
+    const clampD = (d: number) => {
+      if (page <= 1 && d > 0) return 0 // no page before the first
+      if (page >= pageCount && d < 0) return 0 // none after the last
+      return d
+    }
 
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 1 || zoom !== 1 || selectMode) {
         mode = 'idle'
         return
       }
-      x0 = e.touches[0].clientX
+      x0 = lastX = e.touches[0].clientX
       y0 = e.touches[0].clientY
-      t0 = e.timeStamp
+      lastT = e.timeStamp
+      vx = 0
       w = scroller.clientWidth
       mode = 'maybe'
     }
 
     const onMove = (e: TouchEvent) => {
       if (mode === 'idle' || e.touches.length !== 1) return
-      const dx = e.touches[0].clientX - x0
+      const nx = e.touches[0].clientX
+      const dx = nx - x0
       const dy = e.touches[0].clientY - y0
       if (mode === 'maybe') {
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
@@ -876,12 +903,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         }
       }
       if (mode === 'follow' || mode === 'fallback') e.preventDefault()
+      // Smoothed instantaneous velocity for the release.
+      if (e.timeStamp > lastT) {
+        vx = 0.75 * ((nx - lastX) / (e.timeStamp - lastT)) + 0.25 * vx
+        lastX = nx
+        lastT = e.timeStamp
+      }
       if (mode === 'follow' && trackRef.current) {
-        let d = dx
-        if (page <= 1 && d > 0) d = 0 // no page before the first
-        if (page >= pageCount && d < 0) d = 0 // none after the last
         trackRef.current.style.transition = 'none'
-        trackRef.current.style.transform = `translateX(${-w + d}px)`
+        trackRef.current.style.transform = `translateX(${-w + clampD(dx)}px)`
       }
     }
 
@@ -891,34 +921,67 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       const t = e.changedTouches[0]
       const dx = t.clientX - x0
       const dy = t.clientY - y0
-      const passed =
-        e.timeStamp - t0 < 800 && Math.abs(dx) > w * 0.22 && Math.abs(dx) > Math.abs(dy) * 1.2
+      // Commit on either a far-enough drag or a quick flick in that direction.
+      const far = Math.abs(dx) > w * 0.2 && Math.abs(dx) > Math.abs(dy) * 1.2
+      const flick = Math.abs(vx) > 0.45 && Math.sign(vx) === -dir
       if (m === 'fallback') {
-        if (passed) turn(dx < 0 ? 1 : -1)
+        if (far || flick) turn(dx < 0 ? 1 : -1)
         return
       }
       if (m !== 'follow') return
       const track = trackRef.current
-      const commit = passed && ((dir > 0 && page < pageCount) || (dir < 0 && page > 1))
+      const wantCommit = (far || flick) && ((dir > 0 && page < pageCount) || (dir < 0 && page > 1))
       if (!track) {
-        if (commit) turn(dir)
+        if (wantCommit) turn(dir)
         setDrag(null)
         return
       }
-      track.style.transition = 'transform .2s ease-out'
-      if (commit) {
-        track.style.transform = `translateX(${-w - dir * w}px)` // slide neighbour in
-        dragCommitRef.current = true
-        turn(dir) // draw() re-renders; the view effect drops the overlay when ready
-        window.setTimeout(() => {
-          if (dragCommitRef.current) {
-            dragCommitRef.current = false
-            setDrag(null)
-          }
-        }, 500)
-      } else {
-        track.style.transform = `translateX(${-w}px)` // snap back to centre
-        window.setTimeout(() => setDrag(null), 200)
+      const curX = -w + clampD(dx)
+      const targetX = wantCommit ? -w - dir * w : -w
+      const remaining = Math.abs(targetX - curX)
+      // Settle at a speed that matches how fast you let go (a flick finishes
+      // quickly; a slow release eases), clamped to a pleasant range.
+      const speed = Math.max(Math.abs(vx), 1.5)
+      const dur = Math.max(150, Math.min(360, remaining / speed))
+
+      const finishSnap = () => setDrag(null)
+      const onTransitionEnd = () => {
+        track.removeEventListener('transitionend', onTransitionEnd)
+        if (wantCommit) {
+          slideDoneRef.current = true
+          tryFinishDrag()
+        } else {
+          finishSnap()
+        }
+      }
+
+      if (remaining < 0.5) {
+        // Already there (released at rest against a boundary): no animation.
+        track.style.transform = `translateX(${targetX}px)`
+        if (wantCommit) {
+          commitTargetRef.current = page + dir
+          slideDoneRef.current = true
+          turn(dir)
+          tryFinishDrag()
+        } else {
+          finishSnap()
+        }
+        return
+      }
+
+      track.style.transition = `transform ${Math.round(dur)}ms cubic-bezier(.2,.68,.25,1)`
+      track.addEventListener('transitionend', onTransitionEnd)
+      // Safety net if transitionend doesn't fire (interrupted/hidden tab).
+      window.setTimeout(onTransitionEnd, Math.round(dur) + 220)
+      // Kick the transition on the next frame so the browser registers the
+      // starting position first (a same-frame set can jump straight to target).
+      requestAnimationFrame(() => {
+        track.style.transform = `translateX(${targetX}px)`
+      })
+      if (wantCommit) {
+        commitTargetRef.current = page + dir
+        slideDoneRef.current = false
+        turn(dir) // re-render underneath; tryFinishDrag drops the overlay when both are ready
       }
     }
 
@@ -932,7 +995,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       scroller.removeEventListener('touchend', onEnd)
       scroller.removeEventListener('touchcancel', onEnd)
     }
-  }, [turn, zoom, selectMode, viewMode, spreadActive, page, pageCount])
+  }, [turn, zoom, selectMode, viewMode, spreadActive, page, pageCount, tryFinishDrag])
 
   // Real keyboard nav on desktop: ←/→ turn pages; Esc closes whatever is on
   // top (settings, contents) and finally returns to the library.
