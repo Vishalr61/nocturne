@@ -33,6 +33,7 @@ import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import { notesMarkdown } from '../export/exportNotes'
 import { extractPages } from '../export/extractPages'
+import { startReadAloud, type ReadAloud } from './readAloud'
 import {
   addBookmark,
   addHighlight,
@@ -201,6 +202,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [extractTo, setExtractTo] = useState(1)
   const [extracting, setExtracting] = useState(false)
   const [extractErr, setExtractErr] = useState(false)
+  const [reading, setReading] = useState(false)
+  const readAloudRef = useRef<ReadAloud | null>(null)
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1249,6 +1252,31 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- page read at open time only
   }, [showSettings])
 
+  const toggleReadAloud = useCallback(() => {
+    if (readAloudRef.current) {
+      readAloudRef.current.stop()
+      readAloudRef.current = null
+      setReading(false)
+      return
+    }
+    const doc = docRef.current
+    if (!doc) return
+    readAloudRef.current = startReadAloud({
+      doc,
+      textCache: textCacheRef.current,
+      startPage: page,
+      onPage: (p) => setPage(p),
+      onEnd: () => {
+        readAloudRef.current = null
+        setReading(false)
+      },
+    })
+    setReading(true)
+  }, [page])
+
+  // Never leave a voice running after the reader unmounts.
+  useEffect(() => () => readAloudRef.current?.stop(), [])
+
   // The reader's chrome follows the reading theme, so the page and its frame
   // are one calm surface instead of a dark app around a differently-dark page.
   const theme = themeById(themeId)
@@ -1892,9 +1920,27 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
               </div>
             </div>
-            <p className="mb-7 mt-2 px-1 text-xs leading-relaxed text-ink-faint">
+            <p className="mb-5 mt-2 px-1 text-xs leading-relaxed text-ink-faint">
               Dims below the phone's minimum brightness for reading in the dark.
             </p>
+
+            {'speechSynthesis' in window && (
+              <div className="mb-7 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+                <span className="text-[13px] text-ink-body">
+                  Read aloud <span className="text-ink-faint">(follows along)</span>
+                </span>
+                <button
+                  className={`rounded-full px-4 py-1.5 text-[13px] font-semibold transition-colors ${
+                    reading
+                      ? 'bg-accent text-accent-on'
+                      : 'border border-accent/40 text-accent hover:border-accent'
+                  }`}
+                  onClick={toggleReadAloud}
+                >
+                  {reading ? '◼ Stop' : '▶ Play'}
+                </button>
+              </div>
+            )}
 
             <button
               className="w-full rounded-2xl bg-accent py-3.5 text-sm font-semibold text-accent-on transition-colors hover:bg-accent-hi disabled:opacity-50"
