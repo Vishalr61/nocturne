@@ -1342,7 +1342,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             slid by the gesture handler. Display-only (touches go to the
             scroller); covers the live canvas so the turn reads as one motion. */}
         {drag && (
-          <div data-dragfilm className="pointer-events-none absolute inset-0 z-[12] overflow-hidden">
+          <div
+            data-dragfilm
+            className="pointer-events-none absolute inset-0 z-[12] overflow-hidden"
+            style={{ background: chromeBg }}
+          >
             <div
               ref={trackRef}
               data-dragtrack
