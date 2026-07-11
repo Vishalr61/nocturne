@@ -61,6 +61,23 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
+function comfortNum(key: string, fallback: number): number {
+  try {
+    const v = Number(localStorage.getItem(key))
+    return Number.isFinite(v) && localStorage.getItem(key) !== null ? v : fallback
+  } catch {
+    return fallback
+  }
+}
+function comfortBool(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key)
+    return v === null ? fallback : v === '1'
+  } catch {
+    return fallback
+  }
+}
+
 interface ReaderProps {
   bookId: string
   onShelf: () => void
@@ -98,6 +115,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [zoom, setZoom] = useState(1)
   const [busy, setBusy] = useState(true)
   const [chrome, setChrome] = useState(true)
+  // Comfort settings are device/environment preferences, not per-book, so they
+  // live in localStorage (and don't sync).
+  const [dim, setDim] = useState(() => comfortNum('nocturne-dim', 0))
+  const [autoHide, setAutoHide] = useState(() => comfortBool('nocturne-autohide', true))
+  const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
   const [toc, setToc] = useState<TocItem[]>([])
@@ -590,8 +612,122 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     })
   }, [themeId, imageDim, zoom, page, pageCount, cropMargins, viewMode, spread])
 
-  const turn = (delta: number) =>
-    setPage((p) => Math.min(pageCount || 1, Math.max(1, p + delta)))
+  // A faint tick on page turn. iOS Safari doesn't expose the Vibration API, so
+  // this is silent on iPhone and fires on Android/desktop Chrome.
+  const tick = useCallback(() => {
+    if (haptics && typeof navigator.vibrate === 'function') navigator.vibrate(8)
+  }, [haptics])
+
+  const turn = useCallback(
+    (delta: number) => {
+      setPage((p) => {
+        const next = Math.min(pageCount || 1, Math.max(1, p + delta))
+        if (next !== p) tick()
+        return next
+      })
+    },
+    [pageCount, tick],
+  )
+
+  // Persist comfort prefs.
+  useEffect(() => {
+    try {
+      localStorage.setItem('nocturne-dim', String(dim))
+      localStorage.setItem('nocturne-autohide', autoHide ? '1' : '0')
+      localStorage.setItem('nocturne-haptics', haptics ? '1' : '0')
+    } catch {
+      /* private mode; non-fatal */
+    }
+  }, [dim, autoHide, haptics])
+
+  // Keep the screen awake while reading — you shouldn't have to poke the phone
+  // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null
+    let released = false
+    const acquire = async () => {
+      try {
+        lock = (await navigator.wakeLock?.request('screen')) ?? null
+      } catch {
+        /* denied / unsupported — harmless */
+      }
+    }
+    void acquire()
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && !released) void acquire()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      released = true
+      document.removeEventListener('visibilitychange', onVis)
+      void lock?.release().catch(() => undefined)
+    }
+  }, [])
+
+  // Auto-hide the chrome for immersive reading: after a few idle seconds it
+  // fades, and any tap brings it back. Suppressed while an overlay is open (you
+  // are interacting with the chrome) and while select mode is on.
+  const hideTimer = useRef<number | undefined>(undefined)
+  const bumpChrome = useCallback(() => {
+    window.clearTimeout(hideTimer.current)
+    if (!autoHide || !chrome || showSettings || showSearch || showToc || selectMode) return
+    hideTimer.current = window.setTimeout(() => setChrome(false), 4000)
+  }, [autoHide, chrome, showSettings, showSearch, showToc, selectMode])
+
+  useEffect(() => {
+    bumpChrome()
+    return () => window.clearTimeout(hideTimer.current)
+    // page in deps: turning a page restarts the idle countdown.
+  }, [bumpChrome, page])
+
+  // Swipe left/right to turn pages (single finger), alongside the tap zones.
+  // Only when not zoomed (a zoomed page pans horizontally instead) and not
+  // selecting; two-finger gestures are the pinch handler's. Spread mode has its
+  // own swipe; scroll mode owns vertical movement.
+  useEffect(() => {
+    const scroller = containerRef.current
+    if (!scroller || viewMode !== 'paged' || spreadActive) return
+    let x0 = 0
+    let y0 = 0
+    let t0 = 0
+    let tracking = false
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1 || zoom !== 1 || selectMode) {
+        tracking = false
+        return
+      }
+      tracking = true
+      x0 = e.touches[0].clientX
+      y0 = e.touches[0].clientY
+      t0 = e.timeStamp
+    }
+    const onMove = (e: TouchEvent) => {
+      if (!tracking || e.touches.length !== 1) return
+      const dx = e.touches[0].clientX - x0
+      const dy = e.touches[0].clientY - y0
+      // Once it's clearly a horizontal drag, claim it so the tap-zone click and
+      // the browser's back-swipe don't also fire.
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) e.preventDefault()
+    }
+    const onEnd = (e: TouchEvent) => {
+      if (!tracking) return
+      tracking = false
+      const t = e.changedTouches[0]
+      const dx = t.clientX - x0
+      const dy = t.clientY - y0
+      if (e.timeStamp - t0 < 600 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        turn(dx < 0 ? 1 : -1) // swipe left → next page
+      }
+    }
+    scroller.addEventListener('touchstart', onStart, { passive: true })
+    scroller.addEventListener('touchmove', onMove, { passive: false })
+    scroller.addEventListener('touchend', onEnd)
+    return () => {
+      scroller.removeEventListener('touchstart', onStart)
+      scroller.removeEventListener('touchmove', onMove)
+      scroller.removeEventListener('touchend', onEnd)
+    }
+  }, [turn, zoom, selectMode, viewMode, spreadActive])
 
   // Real keyboard nav on desktop: ←/→ turn pages; Esc closes whatever is on
   // top (settings, contents) and finally returns to the library.
@@ -603,10 +739,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setShowSearch(true)
         return
       }
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return
-      if (e.key === 'ArrowLeft') turn(-1)
-      else if (e.key === 'ArrowRight') turn(1)
-      else if (e.key === 'Escape') {
+      // Escape closes overlays even from a focused field (a slider/search box);
+      // the arrow keys are the ones that must not hijack typing.
+      if (e.key === 'Escape') {
         if (showSearch) setShowSearch(false)
         else if (showSettings) setShowSettings(false)
         else if (showToc) setShowToc(false)
@@ -615,7 +750,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           setSelection(null)
         } else if (highlightQuery) setHighlightQuery('')
         else onShelf()
+        return
       }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return
+      if (e.key === 'ArrowLeft') turn(-1)
+      else if (e.key === 'ArrowRight') turn(1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -798,7 +937,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     <div
       className="anim-fade relative flex h-full flex-col font-sans"
       style={{ background: chromeBg, color: rgbCss(theme.fg) }}
+      onPointerDown={bumpChrome}
     >
+      {/* Night dimmer: darkens everything below the OS minimum for dark rooms.
+          Sits above the page/chrome but below the drawers (z-40+), so the
+          settings slider you're dragging stays at full brightness. */}
+      {dim > 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0 z-[25] bg-black"
+          style={{ opacity: dim }}
+        />
+      )}
       {chrome && (
         <header
           className="z-20 flex items-center gap-3 px-4 py-3 text-sm"
@@ -1228,6 +1378,50 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 />
               </label>
             )}
+
+            {/* Screen: device/environment comfort, not per-book. */}
+            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Screen</div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[13px] text-ink-body">Night dimmer</span>
+              <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
+            </div>
+            <input
+              aria-label="Night dimmer"
+              type="range"
+              min={0}
+              max={0.75}
+              step={0.05}
+              value={dim}
+              onChange={(e) => setDim(Number(e.target.value))}
+              className="cozy-range mb-2 w-full"
+              style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
+            />
+            <p className="mb-5 text-xs leading-relaxed text-ink-faint">
+              Dims below the phone's minimum brightness for reading in the dark.
+            </p>
+            <label className="mb-4 flex cursor-pointer items-center justify-between">
+              <span className="text-[13px] text-ink-body">Auto-hide controls</span>
+              <input
+                type="checkbox"
+                aria-label="Auto-hide controls"
+                className="h-4 w-4 accent-accent"
+                checked={autoHide}
+                onChange={(e) => setAutoHide(e.target.checked)}
+              />
+            </label>
+            <label className="mb-8 flex cursor-pointer items-center justify-between">
+              <span className="text-[13px] text-ink-body">
+                Haptic page turns{' '}
+                <span className="text-ink-faint">(Android/desktop)</span>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Haptics"
+                className="h-4 w-4 accent-accent"
+                checked={haptics}
+                onChange={(e) => setHaptics(e.target.checked)}
+              />
+            </label>
 
             <button
               className="w-full rounded-xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"

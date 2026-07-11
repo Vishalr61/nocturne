@@ -15,6 +15,13 @@ import type { Highlight } from '../storage/db'
 
 const GAP = 16 // px between the two pages
 const dpr = () => Math.min(window.devicePixelRatio || 1, 3)
+const hapticsEnabled = () => {
+  try {
+    return localStorage.getItem('nocturne-haptics') !== '0'
+  } catch {
+    return true
+  }
+}
 
 interface SpreadReaderProps {
   doc: PDFDocumentProxy
@@ -163,8 +170,54 @@ export function SpreadReader({
 
   const turn = (delta: number) => {
     const next = Math.min(pageCount, Math.max(1, leftNo + delta))
-    if (next !== leftNo) onPage(next)
+    if (next !== leftNo) {
+      onPage(next)
+      // Faint tick where the platform supports it (silent on iOS Safari).
+      if (hapticsEnabled() && typeof navigator.vibrate === 'function') navigator.vibrate(8)
+    }
   }
+
+  // Single-finger horizontal swipe turns the spread (two pages at a time).
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    let x0 = 0
+    let y0 = 0
+    let t0 = 0
+    let tracking = false
+    const onStart = (e: TouchEvent) => {
+      tracking = e.touches.length === 1
+      if (!tracking) return
+      x0 = e.touches[0].clientX
+      y0 = e.touches[0].clientY
+      t0 = e.timeStamp
+    }
+    const onMove = (e: TouchEvent) => {
+      if (!tracking || e.touches.length !== 1) return
+      const dx = e.touches[0].clientX - x0
+      const dy = e.touches[0].clientY - y0
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) e.preventDefault()
+    }
+    const onEnd = (e: TouchEvent) => {
+      if (!tracking) return
+      tracking = false
+      const t = e.changedTouches[0]
+      const dx = t.clientX - x0
+      const dy = t.clientY - y0
+      if (e.timeStamp - t0 < 600 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        turn(dx < 0 ? 2 : -2)
+      }
+    }
+    host.addEventListener('touchstart', onStart, { passive: true })
+    host.addEventListener('touchmove', onMove, { passive: false })
+    host.addEventListener('touchend', onEnd)
+    return () => {
+      host.removeEventListener('touchstart', onStart)
+      host.removeEventListener('touchmove', onMove)
+      host.removeEventListener('touchend', onEnd)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftNo, pageCount])
 
   return (
     <div ref={hostRef} className="relative flex-1 overflow-hidden">
