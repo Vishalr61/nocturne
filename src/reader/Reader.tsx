@@ -32,6 +32,7 @@ import { SpreadReader } from './SpreadReader'
 import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import { notesMarkdown } from '../export/exportNotes'
+import { extractPages } from '../export/extractPages'
 import {
   addBookmark,
   addHighlight,
@@ -196,6 +197,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
+  const [extractFrom, setExtractFrom] = useState(1)
+  const [extractTo, setExtractTo] = useState(1)
+  const [extracting, setExtracting] = useState(false)
+  const [extractErr, setExtractErr] = useState(false)
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1218,6 +1223,32 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [themeId, title])
 
+  const onExtract = useCallback(async () => {
+    const from = Math.max(1, Math.min(extractFrom, extractTo))
+    const to = Math.min(pageCount || 1, Math.max(extractFrom, extractTo))
+    setExtracting(true)
+    try {
+      const book = await getBook(bookId)
+      if (!book) return
+      const blob = await extractPages(book.data, from, to)
+      downloadBlob(blob, `${title || 'nocturne'} p${from}-${to}.pdf`)
+    } catch {
+      setExtractErr(true)
+      setTimeout(() => setExtractErr(false), 2500)
+    } finally {
+      setExtracting(false)
+    }
+  }, [extractFrom, extractTo, pageCount, bookId, title])
+
+  // Seed the extract range with wherever you are when the drawer opens.
+  useEffect(() => {
+    if (showSettings) {
+      setExtractFrom(page)
+      setExtractTo(page)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- page read at open time only
+  }, [showSettings])
+
   // The reader's chrome follows the reading theme, so the page and its frame
   // are one calm surface instead of a dark app around a differently-dark page.
   const theme = themeById(themeId)
@@ -1872,6 +1903,37 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             >
               {exporting !== null ? `Exporting ${Math.round(exporting * 100)}%` : 'Export dark PDF'}
             </button>
+
+            {/* Extract keeps the ORIGINAL pages (colours, text layer) — it's
+                "send chapter 3", not "export the dark theme". */}
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                aria-label="Extract from page"
+                type="number"
+                min={1}
+                max={pageCount || 1}
+                value={extractFrom}
+                onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
+                className="w-16 rounded-xl border border-line bg-inset px-2 py-2.5 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+              />
+              <span className="text-xs text-ink-soft">to</span>
+              <input
+                aria-label="Extract to page"
+                type="number"
+                min={1}
+                max={pageCount || 1}
+                value={extractTo}
+                onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
+                className="w-16 rounded-xl border border-line bg-inset px-2 py-2.5 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+              />
+              <button
+                className="flex-1 rounded-xl border border-accent/40 py-2.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+                disabled={!pageCount || extracting}
+                onClick={() => void onExtract()}
+              >
+                {extractErr ? 'Couldn’t extract' : extracting ? 'Extracting…' : 'Extract pages'}
+              </button>
+            </div>
 
             {cls && (
               <div className="mt-6 text-center text-[11px] text-ink-faint">page: {cls.kind}</div>
