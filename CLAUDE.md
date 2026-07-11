@@ -162,7 +162,11 @@ src/
 9. ✅ **Text Mode** (reflow) — `engine/reflow.ts` reconstructs paragraphs from
    the text layer; `reader/TextReader.tsx` streams them as a scrolling column
    in your font/size/spacing. Digital PDFs only; scans need OCR (below).
-10. Vector export (rewrite colour operators; selectable text in the export).
+10. 🟡 Vector export (`src/export/vectorPdf.ts`, beta button in the drawer):
+    rewrites content-stream colour operators onto the theme ramp; selectable
+    text, ~60× smaller files. Raster export stays default until it graduates.
+    Also shipped alongside: notes export (`export/exportNotes.ts`), page-range
+    extract (`export/extractPages.ts`), read aloud (`reader/readAloud.ts`).
 11. Scanned-PDF OCR path.
 
 ## Deployment

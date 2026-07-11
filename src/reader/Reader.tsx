@@ -35,6 +35,7 @@ import { notesMarkdown } from '../export/exportNotes'
 import { extractPages } from '../export/extractPages'
 import { startReadAloud, type ReadAloud } from './readAloud'
 import { exportVectorPdf } from '../export/vectorPdf'
+import { exportEpub } from '../export/exportEpub'
 import {
   addBookmark,
   addHighlight,
@@ -206,6 +207,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [reading, setReading] = useState(false)
   const readAloudRef = useRef<ReadAloud | null>(null)
   const [vexporting, setVexporting] = useState<number | null>(null)
+  const [epubbing, setEpubbing] = useState<number | null>(null)
+  const [epubErr, setEpubErr] = useState(false)
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1248,6 +1251,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [bookId, themeId, title, marks])
 
+  const onEpubExport = useCallback(async () => {
+    const doc = docRef.current
+    if (!doc) return
+    setEpubbing(0)
+    try {
+      const blob = await exportEpub(doc, {
+        title,
+        textCache: textCacheRef.current,
+        onProgress: (done, total) => setEpubbing(done / total),
+      })
+      downloadBlob(blob, `${title || 'nocturne'}.epub`)
+    } catch {
+      setEpubErr(true)
+      setTimeout(() => setEpubErr(false), 3000)
+    } finally {
+      setEpubbing(null)
+    }
+  }, [title])
+
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))
     const to = Math.min(pageCount || 1, Math.max(extractFrom, extractTo))
@@ -1982,6 +2004,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               {vexporting !== null
                 ? `Vector export ${Math.round(vexporting * 100)}%`
                 : 'Export dark PDF (vector beta)'}
+            </button>
+
+            {/* EPUB frees the prose (reflow) — figures and scans stay PDF-only. */}
+            <button
+              className="mt-3 w-full rounded-2xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+              disabled={!pageCount || epubbing !== null}
+              onClick={() => void onEpubExport()}
+            >
+              {epubErr
+                ? 'Needs a text layer (scans need OCR)'
+                : epubbing !== null
+                  ? `EPUB export ${Math.round(epubbing * 100)}%`
+                  : 'Export EPUB (prose beta)'}
             </button>
 
             {/* Extract keeps the ORIGINAL pages (colours, text layer) — it's
