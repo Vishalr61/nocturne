@@ -32,6 +32,7 @@ interface ContinuousReaderProps {
   crop: CropBox | null
   /** Page width multiplier. 1 = whole page fits the viewport (fit-page). */
   zoom: number
+  onZoom: (zoom: number) => void
   /** Current page (controlled): a jump scrolls here; scrolling reports back. */
   page: number
   onPage: (page: number) => void
@@ -55,6 +56,7 @@ export function ContinuousReader({
   imageDim,
   crop,
   zoom,
+  onZoom,
   page,
   onPage,
   onToggleChrome,
@@ -113,14 +115,15 @@ export function ContinuousReader({
   }, [doc, crop])
 
   // Content width: at zoom 1 the WHOLE page fits the viewport (fit-page) — on a
-  // phone that's width-bound (unchanged), on a wide desktop window it's
-  // height-bound, which is the fix for "too zoomed in, can't zoom out". Zoom
-  // scales up from there, capped at the container width so a vertical scroll
-  // never also needs a horizontal one.
+  // phone that's width-bound, on a wide desktop window height-bound. Zoom scales
+  // up from there and is allowed to exceed the viewport width, so on a phone
+  // (where fit-page already fills the width) zoom actually enlarges the page;
+  // the strip then pans horizontally. (Capping at width made zoom a no-op on
+  // phones — the "can't zoom in scroll" bug.)
   const availW = Math.max(0, dims.w - 16)
   const availH = Math.max(0, dims.h - PAGE_GAP)
   const fitPage = aspect ? Math.min(availW, availH / aspect) : availW
-  const contentWidth = Math.min(availW, fitPage * zoom)
+  const contentWidth = fitPage * zoom
 
   const slotHeight = contentWidth && aspect ? contentWidth * aspect + PAGE_GAP : 0
   const slotFor = useCallback(
@@ -197,6 +200,47 @@ export function ContinuousReader({
     scroller.addEventListener('scroll', onUserScroll, { passive: true })
     return () => scroller.removeEventListener('scroll', onUserScroll)
   }, [onUserScroll])
+
+  // Pinch to zoom the whole strip (the natural gesture), committing on release —
+  // the page width re-renders and the strip re-anchors to your place.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    let d0 = 0
+    let ratio = 1
+    let active = false
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return
+      e.preventDefault()
+      d0 = dist(e.touches)
+      ratio = 1
+      active = true
+    }
+    const onMove = (e: TouchEvent) => {
+      if (!active || e.touches.length !== 2) return
+      e.preventDefault()
+      if (d0 > 0) ratio = dist(e.touches) / d0
+    }
+    const onEnd = () => {
+      if (!active) return
+      active = false
+      if (Math.abs(ratio - 1) > 0.05) {
+        onZoom(Math.min(4, Math.max(1, zoom * ratio)))
+      }
+    }
+    scroller.addEventListener('touchstart', onStart, { passive: false })
+    scroller.addEventListener('touchmove', onMove, { passive: false })
+    scroller.addEventListener('touchend', onEnd)
+    scroller.addEventListener('touchcancel', onEnd)
+    return () => {
+      scroller.removeEventListener('touchstart', onStart)
+      scroller.removeEventListener('touchmove', onMove)
+      scroller.removeEventListener('touchend', onEnd)
+      scroller.removeEventListener('touchcancel', onEnd)
+    }
+  }, [zoom, onZoom])
 
   // The one place that scrolls the strip programmatically. Suppresses reporting
   // until the scroll settles, and sets the render window for the destination.
@@ -302,12 +346,22 @@ export function ContinuousReader({
     <div
       ref={scrollerRef}
       className="relative flex-1 overflow-auto"
-      style={{ touchAction: 'pan-y' }}
+      // pan-x too so a zoomed (wider-than-screen) page can be panned sideways.
+      style={{ touchAction: 'pan-x pan-y' }}
       onClick={onToggleChrome}
     >
       {/* One tall spacer establishes the full scroll height; pages are absolutely
-          positioned into it so only the visible few exist in the DOM. */}
-      <div style={{ height: pageCount * slotHeight, position: 'relative' }}>
+          positioned into it so only the visible few exist in the DOM. Its width
+          is the (possibly zoomed) page width, centred when it fits and
+          horizontally scrollable when it's wider than the screen. */}
+      <div
+        style={{
+          height: pageCount * slotHeight,
+          width: contentWidth,
+          margin: '0 auto',
+          position: 'relative',
+        }}
+      >
         {items.map((n) => (
           <PageSlot
             key={n}

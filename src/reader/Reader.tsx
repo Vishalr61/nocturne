@@ -29,7 +29,7 @@ import {
 import { TextLayer, type TextSelection } from './TextLayer'
 import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
-import { TextReader, type TextFont } from './TextReader'
+import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBookmark,
@@ -123,6 +123,13 @@ function comfortBool(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key)
     return v === null ? fallback : v === '1'
+  } catch {
+    return fallback
+  }
+}
+function comfortStr(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback
   } catch {
     return fallback
   }
@@ -228,8 +235,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // Text Mode reading prefs are personal comfort settings (device-global).
   const [textSize, setTextSize] = useState(() => comfortNum('nocturne-textsize', 19))
   const [textLeading, setTextLeading] = useState(() => comfortNum('nocturne-textleading', 1.6))
-  const [textFont, setTextFont] = useState<TextFont>(() =>
-    comfortBool('nocturne-textserif', true) ? 'serif' : 'sans',
+  const [textFontId, setTextFontId] = useState(() => comfortStr('nocturne-textfont', 'lora'))
+  const [textWidth, setTextWidth] = useState(() => comfortNum('nocturne-textwidth', 660))
+  const [textJustify, setTextJustify] = useState(() => comfortBool('nocturne-textjustify', false))
+  const [textPara, setTextPara] = useState<ParaStyle>(() =>
+    comfortStr('nocturne-textpara', 'indent') === 'spaced' ? 'spaced' : 'indent',
   )
   const [spread, setSpread] = useState(true)
   const [landscape, setLandscape] = useState(
@@ -804,11 +814,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-haptics', haptics ? '1' : '0')
       localStorage.setItem('nocturne-textsize', String(textSize))
       localStorage.setItem('nocturne-textleading', String(textLeading))
-      localStorage.setItem('nocturne-textserif', textFont === 'serif' ? '1' : '0')
+      localStorage.setItem('nocturne-textfont', textFontId)
+      localStorage.setItem('nocturne-textwidth', String(textWidth))
+      localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
+      localStorage.setItem('nocturne-textpara', textPara)
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, autoHide, haptics, textSize, textLeading, textFont])
+  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara])
 
   // Keep the screen awake while reading — you shouldn't have to poke the phone
   // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
@@ -1298,6 +1311,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           imageDim={imageDim}
           crop={cropMargins ? cropBox : null}
           zoom={zoom}
+          onZoom={setZoom}
           page={page}
           onPage={setPage}
           onToggleChrome={() => setChrome((c) => !c)}
@@ -1316,7 +1330,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           bg={chromeBg}
           fontPx={textSize}
           leading={textLeading}
-          family={textFont}
+          family={fontStack(textFontId)}
+          maxWidth={textWidth}
+          justify={textJustify}
+          paraStyle={textPara}
           textCache={textCacheRef.current}
           onPage={setPage}
           onToggleChrome={() => setChrome((c) => !c)}
@@ -1629,28 +1646,30 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </label>
             )}
 
-            {/* Text Mode: font, size, spacing — the reflow controls. */}
+            {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
             {viewMode === 'text' && (
               <>
-                <div className="mb-2.5 flex rounded-xl bg-inset p-1">
-                  <button
-                    className={`flex-1 rounded-[9px] py-2 font-serif text-[15px] ${
-                      textFont === 'serif' ? 'bg-accent text-accent-on' : 'text-ink-mid'
-                    }`}
-                    onClick={() => setTextFont('serif')}
-                  >
-                    Serif
-                  </button>
-                  <button
-                    className={`flex-1 rounded-[9px] py-2 text-[13px] ${
-                      textFont === 'sans' ? 'bg-accent text-accent-on' : 'text-ink-mid'
-                    }`}
-                    onClick={() => setTextFont('sans')}
-                  >
-                    Sans
-                  </button>
+                <div className="mb-4 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Font
                 </div>
-                <div className="mb-2 mt-5 flex items-center justify-between">
+                <div className="mb-6 grid grid-cols-2 gap-2">
+                  {TEXT_FONTS.map((f) => (
+                    <button
+                      key={f.id}
+                      className={`rounded-lg border px-3 py-2.5 text-left leading-tight ${
+                        textFontId === f.id
+                          ? 'border-accent text-ink-bright'
+                          : 'border-line text-ink-mid'
+                      }`}
+                      style={{ fontFamily: f.stack }}
+                      onClick={() => setTextFontId(f.id)}
+                    >
+                      <span className="text-[15px]">{f.name}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mb-2 flex items-center justify-between">
                   <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
                     Text size
                   </span>
@@ -1671,6 +1690,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   />
                   <span className="font-serif text-2xl text-ink-soft">A</span>
                 </div>
+
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
                     Line spacing
@@ -1685,9 +1705,67 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   step={0.05}
                   value={textLeading}
                   onChange={(e) => setTextLeading(Number(e.target.value))}
-                  className="cozy-range mb-8 w-full"
+                  className="cozy-range mb-6 w-full"
                   style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
                 />
+
+                <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Reading width
+                </div>
+                <div className="mb-6 flex rounded-xl bg-inset p-1">
+                  {(
+                    [
+                      ['Narrow', 520],
+                      ['Medium', 660],
+                      ['Wide', 820],
+                    ] as const
+                  ).map(([label, w]) => (
+                    <button
+                      key={w}
+                      className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                        textWidth === w ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                      }`}
+                      onClick={() => setTextWidth(w)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                  Paragraphs
+                </div>
+                <div className="mb-4 flex rounded-xl bg-inset p-1">
+                  <button
+                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                      textPara === 'indent' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                    }`}
+                    onClick={() => setTextPara('indent')}
+                  >
+                    Indented
+                  </button>
+                  <button
+                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                      textPara === 'spaced' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                    }`}
+                    onClick={() => setTextPara('spaced')}
+                  >
+                    Spaced
+                  </button>
+                </div>
+                <label className="mb-8 flex cursor-pointer items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Justify{' '}
+                    <span className="lowercase tracking-normal text-ink-faint">(+ hyphenate)</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    aria-label="Justify text"
+                    className="h-4 w-4 accent-accent"
+                    checked={textJustify}
+                    onChange={(e) => setTextJustify(e.target.checked)}
+                  />
+                </label>
               </>
             )}
 

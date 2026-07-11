@@ -10,7 +10,31 @@ import { reconstructPage, stitch, type Block } from '../engine/reflow'
 // backward (with scroll anchoring) as you scroll up, like an ebook. Figures and
 // tables don't survive reflow — that's what Faithful mode is for.
 
-export type TextFont = 'serif' | 'sans'
+// Curated reading faces, self-hosted (see main.tsx). Each carries a fallback
+// stack and whether it reads best as a serif preview label.
+export interface TextFontDef {
+  id: string
+  name: string
+  stack: string
+  serif: boolean
+}
+export const TEXT_FONTS: TextFontDef[] = [
+  { id: 'lora', name: 'Lora', stack: "'Lora', Georgia, serif", serif: true },
+  { id: 'literata', name: 'Literata', stack: "'Literata', Georgia, serif", serif: true },
+  { id: 'merriweather', name: 'Merriweather', stack: "'Merriweather', Georgia, serif", serif: true },
+  { id: 'inter', name: 'Inter', stack: "'Inter', system-ui, sans-serif", serif: false },
+  {
+    id: 'atkinson',
+    name: 'Atkinson',
+    stack: "'Atkinson Hyperlegible', system-ui, sans-serif",
+    serif: false,
+  },
+  { id: 'dyslexic', name: 'OpenDyslexic', stack: "'OpenDyslexic', sans-serif", serif: false },
+]
+export const fontStack = (id: string) =>
+  (TEXT_FONTS.find((f) => f.id === id) ?? TEXT_FONTS[0]).stack
+
+export type ParaStyle = 'indent' | 'spaced'
 
 interface TextReaderProps {
   doc: PDFDocumentProxy
@@ -20,7 +44,10 @@ interface TextReaderProps {
   bg: string
   fontPx: number
   leading: number
-  family: TextFont
+  family: string // resolved CSS font-family stack
+  maxWidth: number
+  justify: boolean
+  paraStyle: ParaStyle
   textCache: TextCache
   onPage: (page: number) => void
   onToggleChrome: () => void
@@ -40,6 +67,9 @@ export function TextReader({
   fontPx,
   leading,
   family,
+  maxWidth,
+  justify,
+  paraStyle,
   textCache,
   onPage,
   onToggleChrome,
@@ -154,7 +184,7 @@ export function TextReader({
     return () => scroller.removeEventListener('scroll', onScroll)
   }, [onScroll])
 
-  const fontFamily = family === 'serif' ? 'Lora, Georgia, serif' : 'Inter, system-ui, sans-serif'
+  const fontFamily = family
 
   if (empty) {
     return (
@@ -178,26 +208,50 @@ export function TextReader({
       onClick={onToggleChrome}
     >
       <div
+        lang="en"
         className="mx-auto px-6 py-10"
-        style={{ maxWidth: 680, fontFamily, fontSize: fontPx, lineHeight: leading }}
+        style={{
+          maxWidth,
+          fontFamily,
+          fontSize: fontPx,
+          lineHeight: leading,
+          textAlign: justify ? 'justify' : 'left',
+          hyphens: justify ? 'auto' : 'manual',
+          WebkitHyphens: justify ? 'auto' : 'manual',
+          hangingPunctuation: 'first last',
+        }}
       >
         {items.map((it) => (
           <section key={it.page} data-textpage={it.page}>
-            {it.blocks.map((b, i) =>
-              b.kind === 'h' ? (
-                <h2
+            {it.blocks.map((b, i) => {
+              if (b.kind === 'h') {
+                return (
+                  <h2
+                    key={i}
+                    className="mb-4 mt-9 font-semibold"
+                    style={{ fontSize: '1.3em', lineHeight: 1.2, fontFamily, textAlign: 'left' }}
+                  >
+                    {b.text}
+                  </h2>
+                )
+              }
+              // A drop cap opens each chapter (the paragraph right after a heading).
+              const opensChapter = i > 0 && it.blocks[i - 1].kind === 'h'
+              const indent = paraStyle === 'indent' && !opensChapter && !b.openStart
+              return (
+                <p
                   key={i}
-                  className="mb-4 mt-8 font-semibold"
-                  style={{ fontSize: '1.3em', lineHeight: 1.2, fontFamily }}
+                  className={opensChapter ? 'nocturne-dropcap' : undefined}
+                  style={{
+                    textWrap: 'pretty',
+                    marginBottom: paraStyle === 'spaced' ? '0.9em' : 0,
+                    textIndent: indent ? '1.3em' : 0,
+                  }}
                 >
                   {b.text}
-                </h2>
-              ) : (
-                <p key={i} className="mb-[0.9em]" style={{ textWrap: 'pretty' }}>
-                  {b.text}
                 </p>
-              ),
-            )}
+              )
+            })}
           </section>
         ))}
         {items.length > 0 && (

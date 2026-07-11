@@ -87,6 +87,15 @@ body {
   border: none;
 }
 
+/* Text Mode chapter drop cap. */
+.nocturne-dropcap::first-letter {
+  float: left;
+  font-size: 3.1em;
+  line-height: 0.78;
+  padding: 0.05em 0.09em 0 0;
+  font-weight: 600;
+}
+
 /* Warm scrollbars (desktop). */
 ::-webkit-scrollbar {
   width: 10px;
