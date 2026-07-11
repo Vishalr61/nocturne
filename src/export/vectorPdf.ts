@@ -2,6 +2,7 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
   PDFRawStream,
   PDFRef,
@@ -11,6 +12,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { Theme } from '../engine/theme'
 import { renderPageToCanvas } from '../engine/pdf'
 import { dominantLuma, DARK_PAGE_LUMA } from '../engine/pipeline'
+import { getPageText, rangeRects, type TextCache } from '../engine/search'
 
 // Vector export — roadmap 10. Instead of rasterizing pages (sharp but huge and
 // unselectable), rewrite the PDF's own colour operators so the SAME vector
@@ -328,12 +330,90 @@ async function findDarkPages(doc: PDFDocumentProxy): Promise<Set<number>> {
   return dark
 }
 
+export interface ExportHighlight {
+  page: number
+  start: number
+  end: number
+  text: string
+}
+
+/**
+ * Write stored character-range highlights into the document as real Highlight
+ * annotations (QuadPoints), so Apple Books/Preview show them. Geometry comes
+ * from the same rangeRects the live reader draws with, converted back into
+ * PDF user space via the page viewport.
+ */
+async function addHighlightAnnots(
+  pdf: PDFDocument,
+  doc: PDFDocumentProxy,
+  highlights: ExportHighlight[],
+  textCache: TextCache,
+): Promise<void> {
+  const byPage = new Map<number, ExportHighlight[]>()
+  for (const h of highlights) {
+    if (!byPage.has(h.page)) byPage.set(h.page, [])
+    byPage.get(h.page)!.push(h)
+  }
+
+  for (const [pageNo, hls] of byPage) {
+    if (pageNo < 1 || pageNo > pdf.getPageCount()) continue
+    const pdfjsPage = await doc.getPage(pageNo)
+    const pt = await getPageText(pdfjsPage, textCache)
+    const vp = pdfjsPage.getViewport({ scale: 1 })
+    const leaf = pdf.getPage(pageNo - 1)
+
+    let annots = leaf.node.lookupMaybe(PDFName.of('Annots'), PDFArray)
+    if (!annots) {
+      annots = pdf.context.obj([]) as PDFArray
+      leaf.node.set(PDFName.of('Annots'), annots)
+    }
+
+    for (const h of hls) {
+      const rects = rangeRects(pdfjsPage, pt, h.start, h.end, 1)
+      if (!rects.length) continue
+      const quads: number[] = []
+      let x0 = Infinity
+      let y0 = Infinity
+      let x1 = -Infinity
+      let y1 = -Infinity
+      for (const r of rects) {
+        // Viewport space is top-left origin; PDF space is bottom-up. The four
+        // corners convert to the de-facto QuadPoints order UL,UR,LL,LR.
+        const ul = vp.convertToPdfPoint(r.left, r.top)
+        const ur = vp.convertToPdfPoint(r.left + r.width, r.top)
+        const ll = vp.convertToPdfPoint(r.left, r.top + r.height)
+        const lr = vp.convertToPdfPoint(r.left + r.width, r.top + r.height)
+        quads.push(ul[0], ul[1], ur[0], ur[1], ll[0], ll[1], lr[0], lr[1])
+        for (const [px, py] of [ul, ur, ll, lr]) {
+          x0 = Math.min(x0, px)
+          y0 = Math.min(y0, py)
+          x1 = Math.max(x1, px)
+          y1 = Math.max(y1, py)
+        }
+      }
+      const annot = pdf.context.obj({
+        Type: 'Annot',
+        Subtype: 'Highlight',
+        Rect: [x0, y0, x1, y1],
+        QuadPoints: quads,
+        C: [0.79, 0.65, 0.42], // the accent gold, readable on dark and light
+        CA: 0.45,
+        F: 4, // print flag; keeps viewers from hiding it
+        Contents: PDFHexString.fromText(h.text.slice(0, 500)),
+      })
+      annots.push(pdf.context.register(annot))
+    }
+  }
+}
+
 export async function exportVectorPdf(
   doc: PDFDocumentProxy,
   srcBytes: ArrayBuffer,
   opts: {
     theme: Theme
     satCut: number
+    highlights?: ExportHighlight[]
+    textCache?: TextCache
     onProgress?: (done: number, total: number) => void
   },
 ): Promise<Blob> {
@@ -387,6 +467,9 @@ export async function exportVectorPdf(
 
     // Let the UI breathe on long books.
     await new Promise((r) => setTimeout(r, 0))
+  }
+  if (opts.highlights?.length && opts.textCache) {
+    await addHighlightAnnots(pdf, doc, opts.highlights, opts.textCache)
   }
   opts.onProgress?.(pages.length, pages.length)
 

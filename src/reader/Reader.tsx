@@ -1238,13 +1238,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       const blob = await exportVectorPdf(doc, book.data, {
         theme: themeById(themeId),
         satCut: SAT_CUT,
+        highlights: marks,
+        textCache: textCacheRef.current,
         onProgress: (done, total) => setVexporting(done / total),
       })
       downloadBlob(blob, `${title || 'nocturne'} (dark, vector).pdf`)
     } finally {
       setVexporting(null)
     }
-  }, [bookId, themeId, title])
+  }, [bookId, themeId, title, marks])
 
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))
