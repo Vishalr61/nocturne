@@ -361,9 +361,9 @@ export function Shelf({ onOpen }: ShelfProps) {
                   />
                 )}
                 <span className="text-[13px] text-ink-dim">
-                  {shown.length === books.length
-                    ? `${books.length} ${books.length === 1 ? 'book' : 'books'}`
-                    : `${shown.length} of ${books.length}`}
+                  {shown.length !== books.length
+                    ? `${shown.length} of ${books.length}`
+                    : `${books.length} here${ghosts.length ? ` · ${ghosts.length} to add` : ''}`}
                 </span>
               </div>
             </div>
@@ -456,19 +456,34 @@ export function Shelf({ onOpen }: ShelfProps) {
 
               {/* Ghosts: books you have on another device but not here. Your
                   place/marks are already synced; add the file to start reading. */}
+              {!needle && ghosts.length > 0 && (
+                <div
+                  className="rounded-xl border border-line bg-night-900/40 px-4 py-3"
+                  style={{ gridColumn: '1 / -1' }}
+                >
+                  <div className="text-[13px] font-medium text-ink-shelf">
+                    {ghosts.length} {ghosts.length === 1 ? 'book' : 'books'} from your other device
+                  </div>
+                  <div className="mt-1 text-xs leading-relaxed text-ink-faint">
+                    Sync brings your place, bookmarks and highlights — not the PDF itself. Tap a book
+                    below and pick its file from Files/iCloud; it opens right where you left off.
+                  </div>
+                </div>
+              )}
               {!needle &&
                 ghosts.map((g) => (
                   <div key={`ghost-${g.bookId}`} className="anim-rise relative">
                     <label className="block cursor-pointer text-left">
                       <div
-                        className="grid aspect-[3/4] w-full place-items-center rounded-[13px] border border-dashed border-line bg-night-900/50 p-4 text-center"
-                        title="On another device — add its file to read here"
+                        className="grid aspect-[3/4] w-full place-items-center rounded-[13px] border border-dashed border-accent/30 bg-night-900/50 p-4 text-center transition-colors hover:border-accent/60"
+                        title="Pick this book's PDF from Files to read it here"
                       >
                         <div>
-                          <div className="text-2xl opacity-40">＋</div>
-                          <div className="mt-2 text-[11px] uppercase tracking-[0.12em] text-ink-faint">
-                            Add file
+                          <div className="text-2xl text-accent/70">＋</div>
+                          <div className="mt-2 text-[11px] uppercase tracking-[0.12em] text-accent/80">
+                            {busy ? 'Adding…' : 'Add its file'}
                           </div>
+                          <div className="mt-1 text-[10px] text-ink-faint">from Files / iCloud</div>
                         </div>
                       </div>
                       <input
@@ -482,7 +497,7 @@ export function Shelf({ onOpen }: ShelfProps) {
                     <div className="mt-3 truncate font-serif text-[15px] leading-tight text-ink-mid">
                       {g.title}
                     </div>
-                    <div className="mt-1 text-xs text-ink-faint">On your other device</div>
+                    <div className="mt-1 text-xs text-ink-faint">Tap to add · synced</div>
                   </div>
                 ))}
             </div>
