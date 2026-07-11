@@ -9,3 +9,4 @@ dist-ssr
 .DS_Store
 .vite
 dev-dist
+design-notes.jsonl

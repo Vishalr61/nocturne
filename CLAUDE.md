@@ -113,6 +113,11 @@ src/
 │   └── syncClient.ts push+pull loop, cursor, enable/adopt secret
 ├── sync-worker/      Cloudflare Worker + D1 (schema.sql): opaque LWW sync store
 │                     — ciphertext only, never PDF bytes. Own deploy (wrangler).
+├── dev/
+│   └── suggest.ts    dev-only point-and-suggest overlay (✎ chip): tap an element,
+│                     type a change request → POST /__suggest (middleware in
+│                     vite.config.ts) → design-notes.jsonl (gitignored) for an
+│                     agent to apply. Loaded behind import.meta.env.DEV only.
 ├── library/          Shelf.tsx (saved books, resume, delete) + import.ts (file->DB)
 └── reader/
     ├── Reader.tsx    paged reader: recolor, tap zones, pinch zoom, nav

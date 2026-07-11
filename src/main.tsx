@@ -24,6 +24,10 @@ import '@fontsource/opendyslexic/400.css'
 import '@fontsource/opendyslexic/700.css'
 import './index.css'
 
+// Dev-only point-and-suggest overlay (see src/dev/suggest.ts). The DEV guard
+// makes production builds drop the whole module.
+if (import.meta.env.DEV) void import('./dev/suggest')
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
