@@ -89,17 +89,21 @@ export function TextReader({
     [doc, textCache],
   )
 
-  // Start at the page you were on; scanned/no-text pages yield nothing.
+  // Load ONCE at the page you were on (re-running on the doc, i.e. a new book).
+  // Crucially NOT on startPage: TextReader reports its own page as you scroll,
+  // which changes startPage — re-loading on that would collapse the continuous
+  // reader back to one page every time you crossed a boundary (the bug).
+  const initialPageRef = useRef(startPage)
   useEffect(() => {
     let alive = true
     void (async () => {
-      const first = await reflowPage(startPage)
+      const first = await reflowPage(initialPageRef.current)
       if (!alive) return
       if (first.blocks.length === 0) {
         // Nothing on this page — try to find text nearby before giving up.
         let found: Item | null = null
         for (let d = 1; d <= 3 && !found; d++) {
-          for (const n of [startPage + d, startPage - d]) {
+          for (const n of [initialPageRef.current + d, initialPageRef.current - d]) {
             if (n < 1 || n > pageCount) continue
             const it = await reflowPage(n)
             if (it.blocks.length) {
@@ -109,8 +113,10 @@ export function TextReader({
           }
         }
         if (!alive) return
-        if (found) setItems([found])
-        else setEmpty(true)
+        if (found) {
+          setItems([found])
+          reportedRef.current = found.page
+        } else setEmpty(true)
       } else {
         setItems([first])
       }
@@ -118,7 +124,35 @@ export function TextReader({
     return () => {
       alive = false
     }
-  }, [reflowPage, startPage, pageCount])
+  }, [reflowPage, pageCount])
+
+  // Respond to an EXTERNAL jump (scrubber, Contents, bookmark) — a startPage
+  // that isn't the page we just reported. Scroll to it if it's loaded, else
+  // reset the reader to it. An equal startPage is our own scroll echo: ignore.
+  useEffect(() => {
+    if (startPage === reportedRef.current) return
+    reportedRef.current = startPage
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    const sec = scroller.querySelector<HTMLElement>(`[data-textpage="${startPage}"]`)
+    if (sec) {
+      scroller.scrollTop += sec.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      return
+    }
+    let alive = true
+    void (async () => {
+      const it = await reflowPage(startPage)
+      if (!alive) return
+      setItems([it])
+      setEmpty(it.blocks.length === 0)
+      requestAnimationFrame(() => {
+        if (scrollerRef.current) scrollerRef.current.scrollTop = 0
+      })
+    })()
+    return () => {
+      alive = false
+    }
+  }, [startPage, reflowPage])
 
   const extend = useCallback(
     async (dir: 1 | -1) => {
