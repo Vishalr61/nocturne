@@ -1,4 +1,5 @@
 import type { PageText, Run } from './search'
+import type { Rect } from './classify'
 
 // Text Mode's hard half: turn pdf.js's loose positioned text runs back into
 // paragraphs. pdf.js gives you fragments with (x, y, size, bold, italic) in PDF
@@ -16,7 +17,7 @@ export interface Span {
   i?: boolean
 }
 
-export interface Block {
+export interface TextBlock {
   kind: 'h' | 'p'
   spans: Span[]
   /** Paragraph likely continues onto the next page (join when stitching). */
@@ -24,6 +25,17 @@ export interface Block {
   /** Paragraph likely continues from the previous page. */
   openStart?: boolean
 }
+
+/** An illustration kept in the flow at its original vertical position. The rect
+ *  is in PDF user space (the same space as classify.ts's imageRects); the reader
+ *  renders the recolored crop. This is what lets a chapter-divider icon or an
+ *  inline figure survive reflow instead of being dropped with the layout. */
+export interface ImageBlock {
+  kind: 'img'
+  rect: Rect
+}
+
+export type Block = TextBlock | ImageBlock
 
 interface Line {
   segs: Span[]
@@ -127,10 +139,22 @@ const CHAPTER_MARKER = /^[[(]?\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]?$
 // from a bare page number "42" (which should still be stripped as a footer).
 const BRACKET_MARKER = /^[[(]\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]$/i
 
-/** Reconstruct readable blocks from one page's extracted text. */
-export function reconstructPage(pt: PageText): Block[] {
+/**
+ * Reconstruct readable blocks from one page's extracted text. `imageRects`
+ * (PDF user space, from classify.ts) are woven into the flow at their vertical
+ * position, so illustrations land between the paragraphs they sat between on the
+ * page rather than being dropped. Pass an already-filtered list (drop hairlines
+ * / full-page backgrounds) — this only orders and slots them.
+ */
+export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] {
   const lines = toLines(pt.runs)
-  if (!lines.length) return []
+  if (!lines.length) {
+    // No text to reflow, but there may still be images to show (a bare divider).
+    return imageRects
+      .slice()
+      .sort((a, b) => b.y + b.h - (a.y + a.h))
+      .map((rect) => ({ kind: 'img', rect }) as ImageBlock)
+  }
 
   const bodySize = median(lines.flatMap((l) => Array(Math.max(1, l.text.length)).fill(l.size)))
   // The true left margin: a low percentile of line starts, so it lands on the
@@ -155,7 +179,12 @@ export function reconstructPage(pt: PageText): Block[] {
     const pageNumberish = /^[\divxlc]+$|^\d+\s*$/i.test(l.text)
     return !(short || pageNumberish)
   })
-  if (!body.length) return []
+  if (!body.length) {
+    return imageRects
+      .slice()
+      .sort((a, b) => b.y + b.h - (a.y + a.h))
+      .map((rect) => ({ kind: 'img', rect }) as ImageBlock)
+  }
 
   // The book's normal line spacing, so paragraph breaks can be judged relative
   // to it (some books separate paragraphs by a small extra gap, some by indent,
@@ -200,8 +229,24 @@ export function reconstructPage(pt: PageText): Block[] {
     para = []
   }
 
+  // Illustrations woven in by vertical position: order top-to-bottom by centre
+  // and emit each just before the first text line that sits below it, flushing
+  // the current paragraph so the image interrupts the flow where it did on page.
+  const imgs = imageRects
+    .map((rect) => ({ rect, cy: rect.y + rect.h / 2 }))
+    .sort((a, b) => b.cy - a.cy)
+  let imgAt = 0
+  const emitImagesAbove = (y: number) => {
+    while (imgAt < imgs.length && imgs[imgAt].cy >= y) {
+      pushPara()
+      blocks.push({ kind: 'img', rect: imgs[imgAt].rect })
+      imgAt++
+    }
+  }
+
   for (let i = 0; i < body.length; i++) {
     const line = body[i]
+    emitImagesAbove(line.y)
     const heading =
       line.size > bodySize * 1.25 ||
       (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
@@ -224,6 +269,11 @@ export function reconstructPage(pt: PageText): Block[] {
     para.push(line)
   }
   pushPara()
+  // Any images sitting below all the text (e.g. a footer illustration).
+  while (imgAt < imgs.length) {
+    blocks.push({ kind: 'img', rect: imgs[imgAt].rect })
+    imgAt++
+  }
   return blocks
 }
 

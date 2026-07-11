@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy } from '../engine/pdf'
 import { getPageText, type TextCache } from '../engine/search'
-import { reconstructPage, stitch, spansText, type Block, type Span } from '../engine/reflow'
+import { reconstructPage, stitch, spansText, type Block, type ImageBlock, type Span } from '../engine/reflow'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
@@ -62,9 +62,12 @@ interface TextReaderProps {
 }
 
 // A page renders either as reflowed text (prose) or as its recolored image
-// (cover, title pages, figures, system screens) so nothing visual is lost.
+// (cover, title pages, figures, system screens) so nothing visual is lost. A
+// reflowed page can still carry inline illustrations: `crops` maps each 'img'
+// block to its recolored bitmap and page-relative width, keyed by the block.
+type Crop = { canvas: HTMLCanvasElement; wf: number }
 type Item =
-  | { page: number; kind: 'text'; blocks: Block[] }
+  | { page: number; kind: 'text'; blocks: Block[]; crops?: Map<Block, Crop> }
   | { page: number; kind: 'image'; canvas: HTMLCanvasElement; w: number; h: number }
 
 const SAT_CUT = 0.25
@@ -104,6 +107,21 @@ export function TextReader({
   const recolorRef = useRef<Recolorizer | null>(null)
   const imgSrcRef = useRef<HTMLCanvasElement | null>(null)
   const clsRef = useRef(new Map<number, PageClassification>())
+
+  // There's ONE offscreen source canvas and ONE GL context, so page renders must
+  // not overlap — pdf.js throws "same canvas during multiple render()" and the
+  // recolor output would race. This serializes every render through them (page
+  // images and inline-image crops alike). Without it, StrictMode's double-invoked
+  // effects or a fast scroll can fire two renders at once and Text Mode dies.
+  const renderLock = useRef<Promise<unknown>>(Promise.resolve())
+  const withRenderLock = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = renderLock.current.then(fn, fn)
+    renderLock.current = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }, [])
   useEffect(() => {
     const c = document.createElement('canvas')
     glRef.current = c
@@ -120,30 +138,73 @@ export function TextReader({
   }, [])
 
   const renderPageImage = useCallback(
-    async (pdfPage: PDFPageProxy): Promise<Item | null> => {
-      const recolor = recolorRef.current
-      if (!recolor) return null
-      const vp = pdfPage.getViewport({ scale: 1 })
-      const dpr = Math.min(window.devicePixelRatio || 1, 3)
-      await renderDarkPage(pdfPage, IMG_RENDER_W / vp.width, dpr, recolor, {
-        theme,
-        satCut: SAT_CUT,
-        imageDim,
-        sourceCanvas: imgSrcRef.current ?? undefined,
-      })
-      const gl = glRef.current!
-      const out = document.createElement('canvas')
-      out.width = gl.width
-      out.height = gl.height
-      out.getContext('2d')!.drawImage(gl, 0, 0)
-      return { page: pdfPage.pageNumber, kind: 'image', canvas: out, w: IMG_RENDER_W, h: IMG_RENDER_W * (vp.height / vp.width) }
-    },
-    [theme, imageDim],
+    (pdfPage: PDFPageProxy): Promise<Item | null> =>
+      withRenderLock(async () => {
+        const recolor = recolorRef.current
+        if (!recolor) return null
+        const vp = pdfPage.getViewport({ scale: 1 })
+        const dpr = Math.min(window.devicePixelRatio || 1, 3)
+        await renderDarkPage(pdfPage, IMG_RENDER_W / vp.width, dpr, recolor, {
+          theme,
+          satCut: SAT_CUT,
+          imageDim,
+          sourceCanvas: imgSrcRef.current ?? undefined,
+        })
+        const gl = glRef.current!
+        const out = document.createElement('canvas')
+        out.width = gl.width
+        out.height = gl.height
+        out.getContext('2d')!.drawImage(gl, 0, 0)
+        return { page: pdfPage.pageNumber, kind: 'image', canvas: out, w: IMG_RENDER_W, h: IMG_RENDER_W * (vp.height / vp.width) }
+      }),
+    [theme, imageDim, withRenderLock],
   )
 
-  // Decide per page: reflow prose, but render image-heavy or near-textless
-  // pages (cover, title pages, figures, scans) as their recolored image so
-  // everything is preserved — only the prose is refonted.
+  // Render the recolored page once, then crop each inline-image block out of it.
+  // Cropping the recolored page (not the raw image) keeps the illustration on the
+  // theme ground and dimmed, exactly as Faithful mode shows it — the pipeline
+  // already preserves declared image regions, so the crop is the real picture.
+  const renderInlineCrops = useCallback(
+    (pdfPage: PDFPageProxy, imgBlocks: ImageBlock[]): Promise<Map<Block, Crop> | undefined> =>
+      withRenderLock(async () => {
+        const recolor = recolorRef.current
+        if (!recolor) return undefined
+        const vp = pdfPage.getViewport({ scale: 1 })
+        const dpr = Math.min(window.devicePixelRatio || 1, 3)
+        await renderDarkPage(pdfPage, IMG_RENDER_W / vp.width, dpr, recolor, {
+          theme,
+          satCut: SAT_CUT,
+          imageDim,
+          sourceCanvas: imgSrcRef.current ?? undefined,
+        })
+        const gl = glRef.current!
+        const view = pdfPage.view // [x0, y0, x1, y1], PDF user space, y up
+        const viewW = view[2] - view[0]
+        const viewH = view[3] - view[1]
+        const crops = new Map<Block, Crop>()
+        for (const b of imgBlocks) {
+          const r = b.rect
+          // PDF user space (y up) -> canvas pixels (y down), full page fills gl.
+          const sx = ((r.x - view[0]) / viewW) * gl.width
+          const sy = ((view[3] - (r.y + r.h)) / viewH) * gl.height
+          const sw = (r.w / viewW) * gl.width
+          const sh = (r.h / viewH) * gl.height
+          const c = document.createElement('canvas')
+          c.width = Math.max(1, Math.round(sw))
+          c.height = Math.max(1, Math.round(sh))
+          c.getContext('2d')!.drawImage(gl, sx, sy, sw, sh, 0, 0, c.width, c.height)
+          crops.set(b, { canvas: c, wf: r.w / viewW })
+        }
+        return crops
+      }),
+    [theme, imageDim, withRenderLock],
+  )
+
+  // Decide per page: reflow prose, but render image-heavy or near-textless pages
+  // (cover, title pages, full-page figures, scans) as their recolored image.
+  // Prose pages still keep their illustrations — declared images of a sensible
+  // size are woven back into the flow at their original position (the goblin on a
+  // chapter-divider page, an inline figure) instead of being dropped by reflow.
   const reflowPage = useCallback(
     async (pageNo: number): Promise<Item> => {
       const pdfPage = await doc.getPage(pageNo)
@@ -157,24 +218,43 @@ export function TextReader({
         const img = await renderPageImage(pdfPage)
         if (img) return img
       }
+      const view = pdfPage.view
+      const pageArea = Math.max(1, (view[2] - view[0]) * (view[3] - view[1]))
+      const pageH = view[3] - view[1]
+      // Keep images worth showing: not hairline rules, not a full-page background
+      // (that path is handled above), big enough to read as a picture.
+      const inlineRects = cls.imageRects.filter((r) => {
+        const areaFrac = (r.w * r.h) / pageArea
+        return areaFrac >= 0.004 && areaFrac <= 0.85 && Math.min(r.w, r.h) > pageH * 0.02
+      })
       const pt = await getPageText(pdfPage, textCache, /* ensureStyle */ true)
-      return { page: pageNo, kind: 'text', blocks: reconstructPage(pt) }
+      const blocks = reconstructPage(pt, inlineRects)
+      const imgBlocks = blocks.filter((b): b is ImageBlock => b.kind === 'img')
+      const crops = imgBlocks.length ? await renderInlineCrops(pdfPage, imgBlocks) : undefined
+      return { page: pageNo, kind: 'text', blocks, crops }
     },
-    [doc, textCache, renderPageImage],
+    [doc, textCache, renderPageImage, renderInlineCrops],
   )
 
-  // Load ONCE at the page you were on (re-running on the doc, i.e. a new book).
-  // Crucially NOT on startPage: TextReader reports its own page as you scroll,
-  // which changes startPage — re-loading on that would collapse the continuous
-  // reader back to one page every time you crossed a boundary (the bug).
-  const initialPageRef = useRef(startPage)
+  // Latest reflowPage / startPage read through refs so the load effects don't
+  // list them as deps. reflowPage's identity changes on every theme/dimmer
+  // change; if the initial load depended on it, changing theme in Text Mode
+  // would reset the whole reader back to one page (a real bug).
+  const reflowPageRef = useRef(reflowPage)
+  reflowPageRef.current = reflowPage
+  const startPageRef = useRef(startPage)
+  startPageRef.current = startPage
+
+  // Load ONCE per document (a new book), at the page you were on. Crucially NOT
+  // on startPage (TextReader reports its own page as you scroll) nor reflowPage
+  // (changes on theme/dimmer) — either would collapse the continuous reader.
   useEffect(() => {
     let alive = true
     void (async () => {
-      const first = await reflowPage(initialPageRef.current)
+      const first = await reflowPageRef.current(startPageRef.current)
       if (!alive) return
       // Image pages render; only a genuinely blank text page yields nothing.
-      if (first.kind === 'text' && first.blocks.length === 0) setEmpty(true)
+      if (first.kind === 'text' && first.blocks.length === 0 && !first.crops?.size) setEmpty(true)
       else {
         setItems([first])
         reportedRef.current = first.page
@@ -183,7 +263,7 @@ export function TextReader({
     return () => {
       alive = false
     }
-  }, [reflowPage, pageCount])
+  }, [doc])
 
   // Respond to an EXTERNAL jump (scrubber, Contents, bookmark) — a startPage
   // that isn't the page we just reported. Scroll to it if it's loaded, else
@@ -221,10 +301,13 @@ export function TextReader({
       const edge = dir === 1 ? items[items.length - 1].page : items[0].page
       const next = edge + dir
       if (next < 1 || next > pageCount) return
+      if (items.some((x) => x.page === next)) return // already loaded; never twice
       loadingRef.current = true
       try {
         const it = await reflowPage(next)
         setItems((cur) => {
+          // Guard against a race adding the same page twice (the duplicate-page bug).
+          if (cur.some((x) => x.page === it.page)) return cur
           if (dir === 1) {
             const prev = cur[cur.length - 1]
             if (prev.kind === 'text' && it.kind === 'text') stitch(prev.blocks, it.blocks)
@@ -362,6 +445,11 @@ export function TextReader({
               <ImagePage item={it} />
             ) : (
               it.blocks.map((b, i) => {
+              if (b.kind === 'img') {
+                // An illustration kept in the flow (chapter-divider icon, figure).
+                const crop = it.crops?.get(b)
+                return crop ? <InlineImage key={i} crop={crop} /> : null
+              }
               if (b.kind === 'h') {
                 // Short headings (chapter markers like "[ 1 ]") read best
                 // centered with room; longer section titles stay left.
@@ -410,6 +498,26 @@ export function TextReader({
       </div>
     </div>
   )
+}
+
+/** An illustration kept inline in the reflowed column, sized relative to the
+ *  page (floored so small icons stay visible) and centered. */
+function InlineImage({ crop }: { crop: Crop }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const host = ref.current
+    if (!host) return
+    host.replaceChildren()
+    crop.canvas.style.width = '100%'
+    crop.canvas.style.height = 'auto'
+    crop.canvas.style.display = 'block'
+    host.appendChild(crop.canvas)
+    return () => {
+      if (host) host.replaceChildren()
+    }
+  }, [crop.canvas])
+  const widthPct = Math.min(1, Math.max(crop.wf, 0.25)) * 100
+  return <div ref={ref} className="mx-auto my-6" style={{ width: `${widthPct}%` }} />
 }
 
 /** Render a block's styled spans, preserving bold/italic from the source. */
