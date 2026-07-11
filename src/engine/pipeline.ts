@@ -48,7 +48,7 @@ export interface DarkPageResult {
 /** Declared images covering less than this fraction of the page are "embedded". */
 const EMBEDDED_IMAGE_MAX_COVERAGE = 0.5
 /** Dominant page luminance below this = the page is already dark. */
-const DARK_PAGE_LUMA = 0.45
+export const DARK_PAGE_LUMA = 0.45
 /** Brightness applied to preserved images against the dark ground. */
 const IMAGE_DIM = 0.82
 

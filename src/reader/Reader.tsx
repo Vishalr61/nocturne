@@ -34,6 +34,7 @@ import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import { notesMarkdown } from '../export/exportNotes'
 import { extractPages } from '../export/extractPages'
 import { startReadAloud, type ReadAloud } from './readAloud'
+import { exportVectorPdf } from '../export/vectorPdf'
 import {
   addBookmark,
   addHighlight,
@@ -204,6 +205,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [extractErr, setExtractErr] = useState(false)
   const [reading, setReading] = useState(false)
   const readAloudRef = useRef<ReadAloud | null>(null)
+  const [vexporting, setVexporting] = useState<number | null>(null)
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1226,6 +1228,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [themeId, title])
 
+  const onVectorExport = useCallback(async () => {
+    const doc = docRef.current
+    if (!doc) return
+    setVexporting(0)
+    try {
+      const book = await getBook(bookId)
+      if (!book) return
+      const blob = await exportVectorPdf(doc, book.data, {
+        theme: themeById(themeId),
+        satCut: SAT_CUT,
+        onProgress: (done, total) => setVexporting(done / total),
+      })
+      downloadBlob(blob, `${title || 'nocturne'} (dark, vector).pdf`)
+    } finally {
+      setVexporting(null)
+    }
+  }, [bookId, themeId, title])
+
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))
     const to = Math.min(pageCount || 1, Math.max(extractFrom, extractTo))
@@ -1948,6 +1968,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               onClick={onExport}
             >
               {exporting !== null ? `Exporting ${Math.round(exporting * 100)}%` : 'Export dark PDF'}
+            </button>
+
+            {/* Vector beta: rewrites colour operators instead of rasterizing —
+                small file, selectable text. Raster stays until this graduates. */}
+            <button
+              className="mt-3 w-full rounded-2xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+              disabled={!pageCount || vexporting !== null}
+              onClick={() => void onVectorExport()}
+            >
+              {vexporting !== null
+                ? `Vector export ${Math.round(vexporting * 100)}%`
+                : 'Export dark PDF (vector beta)'}
             </button>
 
             {/* Extract keeps the ORIGINAL pages (colours, text layer) — it's
