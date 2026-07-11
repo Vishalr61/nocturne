@@ -15,7 +15,7 @@ import {
 // last-write-wins. No PDF bytes, no plaintext, no account — see syncCrypto.ts.
 
 // The deployed Worker. Overridable via localStorage for local testing.
-const DEFAULT_SYNC_URL = 'https://nocturne-sync.PENDING.workers.dev/v1/sync'
+const DEFAULT_SYNC_URL = 'https://nocturne-sync.vishalr0012.workers.dev/v1/sync'
 export function syncUrl(): string {
   try {
     return localStorage.getItem('nocturne-sync-url') || DEFAULT_SYNC_URL
