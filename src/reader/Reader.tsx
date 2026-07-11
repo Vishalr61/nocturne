@@ -1336,6 +1336,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           paraStyle={textPara}
           textCache={textCacheRef.current}
           onPage={setPage}
+          onFontSize={setTextSize}
           onToggleChrome={() => setChrome((c) => !c)}
         />
       )}

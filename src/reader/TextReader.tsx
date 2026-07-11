@@ -50,6 +50,8 @@ interface TextReaderProps {
   paraStyle: ParaStyle
   textCache: TextCache
   onPage: (page: number) => void
+  /** Pinch in Text Mode resizes the text (reflowing) rather than zooming the page. */
+  onFontSize: (px: number) => void
   onToggleChrome: () => void
 }
 
@@ -72,8 +74,11 @@ export function TextReader({
   paraStyle,
   textCache,
   onPage,
+  onFontSize,
   onToggleChrome,
 }: TextReaderProps) {
+  const fontPxRef = useRef(fontPx)
+  fontPxRef.current = fontPx
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [items, setItems] = useState<Item[]>([])
   const [empty, setEmpty] = useState(false)
@@ -218,11 +223,52 @@ export function TextReader({
     return () => scroller.removeEventListener('scroll', onScroll)
   }, [onScroll])
 
+  // Pinch resizes the text (reflowing to stay on-screen) instead of letting iOS
+  // zoom the whole page — which, with nothing to pan, just slid the text off
+  // into blank space. preventDefault on the two-finger gesture suppresses the
+  // native zoom; the size change is pure CSS, so it reflows instantly.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    let d0 = 0
+    let s0 = 0
+    let active = false
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return
+      e.preventDefault()
+      d0 = dist(e.touches)
+      s0 = fontPxRef.current
+      active = true
+    }
+    const onMove = (e: TouchEvent) => {
+      if (!active || e.touches.length !== 2) return
+      e.preventDefault()
+      if (d0 <= 0) return
+      const next = Math.max(14, Math.min(30, Math.round((s0 * dist(e.touches)) / d0)))
+      if (next !== fontPxRef.current) onFontSize(next)
+    }
+    const onEnd = () => {
+      active = false
+    }
+    scroller.addEventListener('touchstart', onStart, { passive: false })
+    scroller.addEventListener('touchmove', onMove, { passive: false })
+    scroller.addEventListener('touchend', onEnd)
+    scroller.addEventListener('touchcancel', onEnd)
+    return () => {
+      scroller.removeEventListener('touchstart', onStart)
+      scroller.removeEventListener('touchmove', onMove)
+      scroller.removeEventListener('touchend', onEnd)
+      scroller.removeEventListener('touchcancel', onEnd)
+    }
+  }, [onFontSize])
+
   const fontFamily = family
 
   if (empty) {
     return (
-      <div ref={scrollerRef} className="relative flex-1 overflow-auto" onClick={onToggleChrome}>
+      <div ref={scrollerRef} className="relative flex-1 overflow-y-auto overflow-x-hidden" onClick={onToggleChrome}>
         <div className="mx-auto mt-24 max-w-sm px-6 text-center" style={{ color: fg }}>
           <p className="font-serif text-lg opacity-80">No selectable text here.</p>
           <p className="mt-2 text-sm opacity-50">
@@ -237,7 +283,7 @@ export function TextReader({
   return (
     <div
       ref={scrollerRef}
-      className="relative flex-1 overflow-auto"
+      className="relative flex-1 overflow-y-auto overflow-x-hidden"
       style={{ background: bg, color: fg }}
       onClick={onToggleChrome}
     >
@@ -278,6 +324,7 @@ export function TextReader({
                   className={opensChapter ? 'nocturne-dropcap' : undefined}
                   style={{
                     textWrap: 'pretty',
+                    overflowWrap: 'break-word',
                     marginBottom: paraStyle === 'spaced' ? '0.9em' : 0,
                     textIndent: indent ? '1.3em' : 0,
                   }}
