@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   clampRenderDpr,
   openPdf,
@@ -61,6 +61,55 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
+/** A recolored page rendered to a 2D canvas, with its on-screen display size. */
+interface PageBitmap {
+  canvas: HTMLCanvasElement
+  w: number
+  h: number
+}
+/** Exactly how the current page was rendered, so neighbours can match it. */
+interface RenderParams {
+  cssScale: number
+  dpr: number
+  crop: CropBox | null
+  displayW: number
+  displayH: number
+}
+/** The three-page filmstrip shown during a drag-to-turn. */
+interface DragFilm {
+  w: number
+  prev: PageBitmap | null
+  cur: PageBitmap
+  next: PageBitmap | null
+}
+
+/** Mounts a cached page bitmap (an offscreen canvas) into one filmstrip cell. */
+function BitmapCell({ bmp, cellW }: { bmp: PageBitmap | null; cellW: number }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const host = ref.current
+    if (!host) return
+    host.replaceChildren()
+    if (bmp) {
+      bmp.canvas.style.width = `${bmp.w}px`
+      bmp.canvas.style.height = `${bmp.h}px`
+      bmp.canvas.className = 'block rounded shadow-2xl'
+      host.appendChild(bmp.canvas)
+    }
+    return () => {
+      if (host) host.replaceChildren()
+    }
+  }, [bmp])
+  return (
+    <div
+      className="flex h-full flex-none items-center justify-center p-2"
+      style={{ width: cellW }}
+    >
+      <div ref={ref} />
+    </div>
+  )
+}
+
 function comfortNum(key: string, fallback: number): number {
   try {
     const v = Number(localStorage.getItem(key))
@@ -96,6 +145,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const sourceMetaRef = useRef<CachedSource | null>(null)
   /** The pre-rendered next page; a forward turn consumes it (instant turn). */
   const prefetchRef = useRef<(CachedSource & { canvas: HTMLCanvasElement }) | null>(null)
+  // Drag-to-turn: recolored 2D bitmaps of the current page and its neighbours,
+  // so a swipe can slide them under your finger. Rendered by a dedicated
+  // offscreen GL context (so it never touches the live canvas), cached per page.
+  const filmGlRef = useRef<HTMLCanvasElement | null>(null)
+  const filmRecolorRef = useRef<Recolorizer | null>(null)
+  const filmSrcRef = useRef<HTMLCanvasElement | null>(null)
+  const filmChainRef = useRef<Promise<void>>(Promise.resolve())
+  const bmpCacheRef = useRef<Map<number, PageBitmap>>(new Map())
+  const renderParamsRef = useRef<RenderParams | null>(null)
+  const dragCommitRef = useRef(false)
+  const trackRef = useRef<HTMLDivElement | null>(null)
   /** Classification is scale-independent; classify each page once per doc. */
   const clsCacheRef = useRef(new Map<string, PageClassification>())
   /** Extracted page text, reused by search and highlighting. */
@@ -134,6 +194,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [highlightQuery, setHighlightQuery] = useState('')
   const [highlights, setHighlights] = useState<HighlightRect[]>([])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  /** The live drag-to-turn filmstrip: three page bitmaps that follow the finger. */
+  const [drag, setDrag] = useState<DragFilm | null>(null)
   /** Page whose bookmark note is being edited in the Contents list, and the draft. */
   const [noteFor, setNoteFor] = useState<number | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
@@ -386,9 +448,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // Display exactly at render resolution; when zoom > 1 the canvas overflows
     // the container and overflow-auto provides panning. If the dpr was clamped,
     // the CSS size still honours the requested zoom (slightly soft beats a crash).
-    canvas.style.width = `${result.source.width / result.dpr}px`
-    canvas.style.height = `${result.source.height / result.dpr}px`
+    const displayW = result.source.width / result.dpr
+    const displayH = result.source.height / result.dpr
+    canvas.style.width = `${displayW}px`
+    canvas.style.height = `${displayH}px`
     canvas.style.transform = '' // clear any live pinch preview
+    // Remember exactly how this page was rendered, so the drag-to-turn preview
+    // can render its neighbours identically.
+    renderParamsRef.current = { cssScale, dpr, crop, displayW, displayH }
 
     // Search highlights are positioned against this exact render. NO_HIGHLIGHTS
     // is a stable reference, so clearing twice doesn't re-render.
@@ -459,6 +526,70 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [page, zoom, docVersion, cropBox, cropMargins, classifyCached])
 
+  // Render a page to a recolored 2D bitmap for the drag-to-turn filmstrip, using
+  // a dedicated offscreen GL context so the live canvas is never disturbed.
+  // Neighbours borrow the current page's render params (uniform books), so the
+  // preview lines up; the real page re-renders crisply on commit.
+  const renderBitmap = useCallback(
+    async (pageNo: number) => {
+      const doc = docRef.current
+      const rp = renderParamsRef.current
+      if (!doc || !rp || pageNo < 1 || pageNo > doc.numPages) return
+      if (bmpCacheRef.current.has(pageNo)) return
+      const pdfPage = await doc.getPage(pageNo)
+      const cls = await classifyCached(pdfPage, pageNo)
+      if (!filmRecolorRef.current) {
+        const c = document.createElement('canvas')
+        try {
+          filmRecolorRef.current = new Recolorizer(c, /* preserveDrawingBuffer */ true)
+        } catch {
+          return
+        }
+        filmGlRef.current = c
+        filmSrcRef.current = document.createElement('canvas')
+      }
+      const res = await renderDarkPage(pdfPage, rp.cssScale, rp.dpr, filmRecolorRef.current, {
+        theme: themeById(themeId),
+        satCut: SAT_CUT,
+        imageDim,
+        crop: rp.crop,
+        cls,
+        sourceCanvas: filmSrcRef.current ?? undefined,
+      })
+      const gl = filmGlRef.current!
+      const out = document.createElement('canvas')
+      out.width = gl.width
+      out.height = gl.height
+      out.getContext('2d')!.drawImage(gl, 0, 0)
+      bmpCacheRef.current.set(pageNo, {
+        canvas: out,
+        w: res.source.width / res.dpr,
+        h: res.source.height / res.dpr,
+      })
+    },
+    [themeId, imageDim, classifyCached],
+  )
+
+  // Keep bitmaps for the current page and its two neighbours ready; drop the
+  // rest. Serialized on its own chain (shared offscreen canvases).
+  const ensureNeighbors = useCallback(() => {
+    const p = page
+    filmChainRef.current = filmChainRef.current
+      .then(async () => {
+        for (const k of [...bmpCacheRef.current.keys()]) {
+          if (k < p - 1 || k > p + 1) bmpCacheRef.current.delete(k)
+        }
+        for (const n of [p, p - 1, p + 1]) await renderBitmap(n)
+      })
+      .catch(() => undefined)
+  }, [page, renderBitmap])
+
+  // A look change invalidates every cached bitmap (they were recolored/sized
+  // for the old settings).
+  useEffect(() => {
+    bmpCacheRef.current.clear()
+  }, [themeId, imageDim, zoom, cropMargins, cropBox, docVersion])
+
   // Draws are serialized: pdf.js render and the GL pass each reuse one canvas,
   // and two in-flight draws would interleave into garbage. Rapid page turns
   // supersede queued-but-not-started draws, so only the latest page renders.
@@ -475,6 +606,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     enqueueDraw()
   }, [enqueueDraw])
+
+  // When a page finishes rendering: if a drag-turn was committing, the new page
+  // is now live under the overlay, so drop it. Then refresh the neighbour
+  // bitmaps for the next drag.
+  useEffect(() => {
+    if (!view) return
+    if (dragCommitRef.current) {
+      dragCommitRef.current = false
+      setDrag(null)
+    }
+    ensureNeighbors()
+  }, [view, ensureNeighbors])
 
   // Refit whenever the container resizes for any reason — rotation, window
   // resize, immersive chrome toggling (that changes the height fit-page uses).
@@ -680,54 +823,116 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     // page in deps: turning a page restarts the idle countdown.
   }, [bumpChrome, page])
 
-  // Swipe left/right to turn pages (single finger), alongside the tap zones.
-  // Only when not zoomed (a zoomed page pans horizontally instead) and not
-  // selecting; two-finger gestures are the pinch handler's. Spread mode has its
-  // own swipe; scroll mode owns vertical movement.
+  // Drag to turn: a single-finger horizontal drag slides the current page out
+  // and the neighbour in, following your finger, and settles on release. Only
+  // at zoom 1 (a zoomed page pans instead), not while selecting; two fingers
+  // are the pinch handler's. Falls back to an instant turn if the neighbour
+  // bitmap isn't ready. Spread has its own swipe; scroll owns vertical movement.
   useEffect(() => {
     const scroller = containerRef.current
     if (!scroller || viewMode !== 'paged' || spreadActive) return
     let x0 = 0
     let y0 = 0
     let t0 = 0
-    let tracking = false
+    let mode: 'idle' | 'maybe' | 'follow' | 'fallback' = 'idle'
+    let w = 0
+    let dir = 0
+
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 1 || zoom !== 1 || selectMode) {
-        tracking = false
+        mode = 'idle'
         return
       }
-      tracking = true
       x0 = e.touches[0].clientX
       y0 = e.touches[0].clientY
       t0 = e.timeStamp
+      w = scroller.clientWidth
+      mode = 'maybe'
     }
+
     const onMove = (e: TouchEvent) => {
-      if (!tracking || e.touches.length !== 1) return
+      if (mode === 'idle' || e.touches.length !== 1) return
       const dx = e.touches[0].clientX - x0
       const dy = e.touches[0].clientY - y0
-      // Once it's clearly a horizontal drag, claim it so the tap-zone click and
-      // the browser's back-swipe don't also fire.
-      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) e.preventDefault()
+      if (mode === 'maybe') {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        if (Math.abs(dx) <= Math.abs(dy)) {
+          mode = 'idle' // vertical — not our gesture
+          return
+        }
+        dir = dx < 0 ? 1 : -1
+        const target = page + dir
+        const cur = bmpCacheRef.current.get(page)
+        const nb = target >= 1 && target <= pageCount ? bmpCacheRef.current.get(target) : null
+        // Follow only if we can actually show the neighbour; else instant-turn.
+        mode = cur && nb ? 'follow' : 'fallback'
+        if (mode === 'follow') {
+          setDrag({
+            w,
+            prev: bmpCacheRef.current.get(page - 1) ?? null,
+            cur: cur!,
+            next: bmpCacheRef.current.get(page + 1) ?? null,
+          })
+        }
+      }
+      if (mode === 'follow' || mode === 'fallback') e.preventDefault()
+      if (mode === 'follow' && trackRef.current) {
+        let d = dx
+        if (page <= 1 && d > 0) d = 0 // no page before the first
+        if (page >= pageCount && d < 0) d = 0 // none after the last
+        trackRef.current.style.transition = 'none'
+        trackRef.current.style.transform = `translateX(${-w + d}px)`
+      }
     }
+
     const onEnd = (e: TouchEvent) => {
-      if (!tracking) return
-      tracking = false
+      const m = mode
+      mode = 'idle'
       const t = e.changedTouches[0]
       const dx = t.clientX - x0
       const dy = t.clientY - y0
-      if (e.timeStamp - t0 < 600 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        turn(dx < 0 ? 1 : -1) // swipe left → next page
+      const passed =
+        e.timeStamp - t0 < 800 && Math.abs(dx) > w * 0.22 && Math.abs(dx) > Math.abs(dy) * 1.2
+      if (m === 'fallback') {
+        if (passed) turn(dx < 0 ? 1 : -1)
+        return
+      }
+      if (m !== 'follow') return
+      const track = trackRef.current
+      const commit = passed && ((dir > 0 && page < pageCount) || (dir < 0 && page > 1))
+      if (!track) {
+        if (commit) turn(dir)
+        setDrag(null)
+        return
+      }
+      track.style.transition = 'transform .2s ease-out'
+      if (commit) {
+        track.style.transform = `translateX(${-w - dir * w}px)` // slide neighbour in
+        dragCommitRef.current = true
+        turn(dir) // draw() re-renders; the view effect drops the overlay when ready
+        window.setTimeout(() => {
+          if (dragCommitRef.current) {
+            dragCommitRef.current = false
+            setDrag(null)
+          }
+        }, 500)
+      } else {
+        track.style.transform = `translateX(${-w}px)` // snap back to centre
+        window.setTimeout(() => setDrag(null), 200)
       }
     }
+
     scroller.addEventListener('touchstart', onStart, { passive: true })
     scroller.addEventListener('touchmove', onMove, { passive: false })
     scroller.addEventListener('touchend', onEnd)
+    scroller.addEventListener('touchcancel', onEnd)
     return () => {
       scroller.removeEventListener('touchstart', onStart)
       scroller.removeEventListener('touchmove', onMove)
       scroller.removeEventListener('touchend', onEnd)
+      scroller.removeEventListener('touchcancel', onEnd)
     }
-  }, [turn, zoom, selectMode, viewMode, spreadActive])
+  }, [turn, zoom, selectMode, viewMode, spreadActive, page, pageCount])
 
   // Real keyboard nav on desktop: ←/→ turn pages; Esc closes whatever is on
   // top (settings, contents) and finally returns to the library.
@@ -1132,6 +1337,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             )}
           </div>
         </div>
+
+        {/* Drag-to-turn filmstrip: prev | current | next, centred on current,
+            slid by the gesture handler. Display-only (touches go to the
+            scroller); covers the live canvas so the turn reads as one motion. */}
+        {drag && (
+          <div data-dragfilm className="pointer-events-none absolute inset-0 z-[12] overflow-hidden">
+            <div
+              ref={trackRef}
+              data-dragtrack
+              className="flex h-full"
+              style={{ width: drag.w * 3, transform: `translateX(${-drag.w}px)` }}
+            >
+              <BitmapCell bmp={drag.prev} cellW={drag.w} />
+              <BitmapCell bmp={drag.cur} cellW={drag.w} />
+              <BitmapCell bmp={drag.next} cellW={drag.w} />
+            </div>
+          </div>
+        )}
+
         {busy && (
           <div className="absolute inset-0 grid place-items-center font-serif italic opacity-60">
             Loading…
