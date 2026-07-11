@@ -86,12 +86,12 @@ function canvasJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Uint8Ar
   })
 }
 
-/** Trigger a browser download of the exported dark PDF. */
+/** Trigger a browser download; the caller names the file (extension included). */
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = filename.endsWith('.pdf') ? filename : `${filename}.pdf`
+  a.download = filename
   document.body.appendChild(a)
   a.click()
   a.remove()

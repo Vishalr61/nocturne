@@ -31,6 +31,7 @@ import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
 import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
+import { notesMarkdown } from '../export/exportNotes'
 import {
   addBookmark,
   addHighlight,
@@ -1949,13 +1950,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         <div className="anim-fade absolute inset-0 z-20 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
           <div className="flex items-center justify-between px-5 py-4">
             <span className="font-serif text-lg text-ink-bright">Contents</span>
-            <button
-              aria-label="Close contents"
-              className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
-              onClick={() => setShowToc(false)}
-            >
-              ✕
-            </button>
+            <div className="flex items-center gap-2">
+              {(bookmarks.length > 0 || marks.length > 0) && (
+                <button
+                  className="rounded-lg border border-line bg-inset px-3 py-1.5 text-xs text-ink-soft transition-colors hover:text-ink-body"
+                  onClick={() => {
+                    const md = notesMarkdown(title, bookmarks, marks)
+                    downloadBlob(
+                      new Blob([md], { type: 'text/markdown' }),
+                      `${title || 'nocturne'} — notes.md`,
+                    )
+                  }}
+                >
+                  Export notes
+                </button>
+              )}
+              <button
+                aria-label="Close contents"
+                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                onClick={() => setShowToc(false)}
+              >
+                ✕
+              </button>
+            </div>
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-auto px-3 pb-8">
             {bookmarks.length > 0 && (
