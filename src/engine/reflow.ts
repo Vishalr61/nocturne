@@ -1,17 +1,24 @@
 import type { PageText, Run } from './search'
 
 // Text Mode's hard half: turn pdf.js's loose positioned text runs back into
-// paragraphs. pdf.js gives you fragments with (x, y, size) in PDF text space
-// (y increases upward) and no notion of paragraphs, headings, columns, or which
-// bits are running headers/page numbers. This reconstructs a readable block
-// list — headings and paragraphs, de-hyphenated — for a single-column prose
-// page. It is deliberately conservative: on multi-column or figure-heavy pages
-// the result is imperfect (that's what Faithful mode is for), but on a novel it
-// reads cleanly.
+// paragraphs. pdf.js gives you fragments with (x, y, size, bold, italic) in PDF
+// text space (y increases upward) and no notion of paragraphs, headings,
+// columns, or which bits are running headers/page numbers. This reconstructs a
+// readable block list — headings and paragraphs, de-hyphenated, with bold/italic
+// preserved as styled spans — for a single-column prose page. It's deliberately
+// conservative: multi-column or figure-heavy pages come out imperfect (that's
+// what Faithful mode is for), but a novel reads cleanly.
+
+/** A run of text with uniform styling within a block. */
+export interface Span {
+  text: string
+  b?: boolean
+  i?: boolean
+}
 
 export interface Block {
   kind: 'h' | 'p'
-  text: string
+  spans: Span[]
   /** Paragraph likely continues onto the next page (join when stitching). */
   openEnd?: boolean
   /** Paragraph likely continues from the previous page. */
@@ -19,7 +26,8 @@ export interface Block {
 }
 
 interface Line {
-  text: string
+  segs: Span[]
+  text: string // plain, for measurement and regex checks
   x0: number
   x1: number
   y: number
@@ -36,6 +44,18 @@ function runSize(r: Run): number {
   return r.height || Math.hypot(r.transform[2], r.transform[3]) || 10
 }
 
+export function spansText(spans: Span[]): string {
+  return spans.map((s) => s.text).join('')
+}
+
+/** Append a styled fragment, merging into the previous span if same style. */
+function pushSpan(arr: Span[], text: string, b?: boolean, i?: boolean): void {
+  if (!text) return
+  const last = arr[arr.length - 1]
+  if (last && !!last.b === !!b && !!last.i === !!i) last.text += text
+  else arr.push({ text, b: b || undefined, i: i || undefined })
+}
+
 /** Group runs sharing a baseline into lines, top-to-bottom, left-to-right. */
 function toLines(runs: Run[]): Line[] {
   const real = runs.filter((r) => r.str.trim().length > 0)
@@ -47,22 +67,36 @@ function toLines(runs: Run[]): Line[] {
   const flush = () => {
     if (!cur.length) return
     const ordered = [...cur].sort((a, b) => runX(a) - runX(b))
+    const segs: Span[] = []
     let text = ''
     let prevRight = -Infinity
     for (const r of ordered) {
       const gap = runX(r) - prevRight
-      // Insert a space when there's a visible gap and neither side already has
-      // one. The threshold is a fraction of the font size (roughly a space
-      // width); too high drops spaces between words ("notmine"), too low splits
-      // words, so this is tuned low-ish.
-      if (text && gap > runSize(r) * 0.16 && !/\s$/.test(text) && !/^\s/.test(r.str)) text += ' '
+      // Insert a space when there's a visible gap and neither side has one. The
+      // threshold is a fraction of the font size (~a space width): too high drops
+      // spaces between words ("notmine"), too low splits words.
+      if (text && gap > runSize(r) * 0.16 && !/\s$/.test(text) && !/^\s/.test(r.str)) {
+        pushSpan(segs, ' ')
+        text += ' '
+      }
+      pushSpan(segs, r.str, r.bold, r.italic)
       text += r.str
       prevRight = runX(r) + r.width
     }
-    const x0 = Math.min(...ordered.map(runX))
-    const x1 = Math.max(...ordered.map((r) => runX(r) + r.width))
-    const size = Math.max(...ordered.map(runSize))
-    lines.push({ text: text.replace(/\s+/g, ' ').trim(), x0, x1, y: curY, size })
+    // Trim the line's ends without disturbing interior styling.
+    if (segs.length) {
+      segs[0].text = segs[0].text.replace(/^\s+/, '')
+      segs[segs.length - 1].text = segs[segs.length - 1].text.replace(/\s+$/, '')
+    }
+    const clean = segs.filter((s) => s.text.length > 0)
+    lines.push({
+      segs: clean,
+      text: text.replace(/\s+/g, ' ').trim(),
+      x0: Math.min(...ordered.map(runX)),
+      x1: Math.max(...ordered.map((r) => runX(r) + r.width)),
+      y: curY,
+      size: Math.max(...ordered.map(runSize)),
+    })
     cur = []
   }
   for (const r of sorted) {
@@ -138,24 +172,30 @@ export function reconstructPage(pt: PageText): Block[] {
   let para: Line[] = []
   const pushPara = () => {
     if (!para.length) return
-    let text = ''
+    const spans: Span[] = []
+    let plain = ''
     for (let i = 0; i < para.length; i++) {
-      const t = para[i].text
+      const line = para[i]
       if (i === 0) {
-        text = t
-      } else if (/[A-Za-z]-$/.test(text) && /^[a-z]/.test(t)) {
-        text = text.slice(0, -1) + t // de-hyphenate a word split across lines
+        plain = line.text
+      } else if (/[A-Za-z]-$/.test(plain) && /^[a-z]/.test(line.text)) {
+        // de-hyphenate a word split across lines: drop the trailing hyphen, no space
+        const last = spans[spans.length - 1]
+        if (last) last.text = last.text.replace(/-\s*$/, '')
+        plain = plain.replace(/-\s*$/, '') + line.text
       } else {
-        text += ' ' + t
+        const last = spans[spans.length - 1]
+        if (last && !/\s$/.test(last.text)) last.text += ' '
+        plain = plain + ' ' + line.text
       }
+      for (const sg of line.segs) pushSpan(spans, sg.text, sg.b, sg.i)
     }
-    const last = para[para.length - 1]
-    const first = para[0]
+    const trimmed = spans.filter((s) => s.text.length > 0)
     blocks.push({
       kind: 'p',
-      text: text.trim(),
-      openEnd: last.x1 > rightEdge - bodySize * 2 && !SENTENCE_END.test(text),
-      openStart: /^[a-z]/.test(first.text),
+      spans: trimmed,
+      openEnd: para[para.length - 1].x1 > rightEdge - bodySize * 2 && !SENTENCE_END.test(plain),
+      openStart: /^[a-z]/.test(plain),
     })
     para = []
   }
@@ -167,19 +207,17 @@ export function reconstructPage(pt: PageText): Block[] {
       (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
     if (heading) {
       pushPara()
-      blocks.push({ kind: 'h', text: line.text })
+      blocks.push({ kind: 'h', spans: line.segs.map((s) => ({ ...s })) })
       continue
     }
     if (i > 0 && para.length) {
       const prev = body[i - 1]
       const gap = prev.y - line.y // downward gap between baselines
       // Break on a gap clearly bigger than the book's own line spacing, or an
-      // indented first line. Relative-to-line-spacing (not a fixed size) is what
-      // lets one rule fit both an indent-only novel and one that adds a little
-      // space between paragraphs, without splitting ordinary wrapped lines.
+      // indented first line — relative to the book's own metrics, so one rule
+      // fits both indent-only and spaced-paragraph books without splitting
+      // wrapped lines or merging paragraphs.
       const bigGap = gap > lineGap * 1.5 && gap > line.size * 1.1
-      // Half an em catches a one-em first-line indent (the common novel marker)
-      // without tripping on the tiny x jitter of ordinary wrapped lines.
       const indented = line.x0 - leftMargin > bodySize * 0.5
       if (bigGap || indented) pushPara()
     }
@@ -193,13 +231,15 @@ export function reconstructPage(pt: PageText): Block[] {
 export function stitch(a: Block[], b: Block[]): void {
   const tail = a[a.length - 1]
   const head = b[0]
-  if (tail?.kind === 'p' && tail.openEnd && head?.kind === 'p' && head.openStart) {
-    if (/[A-Za-z]-$/.test(tail.text) && /^[a-z]/.test(head.text)) {
-      tail.text = tail.text.slice(0, -1) + head.text
-    } else {
-      tail.text = tail.text + ' ' + head.text
-    }
-    tail.openEnd = head.openEnd
-    b.shift()
+  if (tail?.kind !== 'p' || !tail.openEnd || head?.kind !== 'p' || !head.openStart) return
+  if (/[A-Za-z]-$/.test(spansText(tail.spans)) && /^[a-z]/.test(spansText(head.spans))) {
+    const last = tail.spans[tail.spans.length - 1]
+    if (last) last.text = last.text.replace(/-\s*$/, '')
+  } else {
+    const last = tail.spans[tail.spans.length - 1]
+    if (last && !/\s$/.test(last.text)) last.text += ' '
   }
+  for (const sg of head.spans) pushSpan(tail.spans, sg.text, sg.b, sg.i)
+  tail.openEnd = head.openEnd
+  b.shift()
 }

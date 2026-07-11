@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy } from '../engine/pdf'
 import { getPageText, type TextCache } from '../engine/search'
-import { reconstructPage, stitch, type Block } from '../engine/reflow'
+import { reconstructPage, stitch, spansText, type Block, type Span } from '../engine/reflow'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
@@ -157,7 +157,7 @@ export function TextReader({
         const img = await renderPageImage(pdfPage)
         if (img) return img
       }
-      const pt = await getPageText(pdfPage, textCache)
+      const pt = await getPageText(pdfPage, textCache, /* ensureStyle */ true)
       return { page: pageNo, kind: 'text', blocks: reconstructPage(pt) }
     },
     [doc, textCache, renderPageImage],
@@ -365,7 +365,7 @@ export function TextReader({
               if (b.kind === 'h') {
                 // Short headings (chapter markers like "[ 1 ]") read best
                 // centered with room; longer section titles stay left.
-                const marker = b.text.length <= 24
+                const marker = spansText(b.spans).length <= 24
                 return (
                   <h2
                     key={i}
@@ -377,7 +377,7 @@ export function TextReader({
                       textAlign: marker ? 'center' : 'left',
                     }}
                   >
-                    {b.text}
+                    {renderSpans(b.spans)}
                   </h2>
                 )
               }
@@ -395,7 +395,7 @@ export function TextReader({
                     textIndent: indent ? '1.3em' : 0,
                   }}
                 >
-                  {b.text}
+                  {renderSpans(b.spans)}
                 </p>
               )
               })
@@ -410,6 +410,21 @@ export function TextReader({
       </div>
     </div>
   )
+}
+
+/** Render a block's styled spans, preserving bold/italic from the source. */
+function renderSpans(spans: Span[]) {
+  return spans.map((s, i) => {
+    if (s.b && s.i)
+      return (
+        <strong key={i}>
+          <em>{s.text}</em>
+        </strong>
+      )
+    if (s.b) return <strong key={i}>{s.text}</strong>
+    if (s.i) return <em key={i}>{s.text}</em>
+    return s.text
+  })
 }
 
 /** Renders a page's recolored image (cover, figure, system screen) in the flow. */

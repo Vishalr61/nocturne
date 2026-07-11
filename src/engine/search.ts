@@ -17,11 +17,47 @@ export interface Run {
   transform: number[]
   width: number
   height: number
+  bold?: boolean
+  italic?: boolean
+}
+
+/** Weight/slant inferred from a font name (e.g. "LiberationSerif-Bold"). */
+function styleOf(name: string | undefined): { bold: boolean; italic: boolean } {
+  // Strip the 6-letter subset prefix pdf.js keeps ("DAAAAA+LiberationSerif-Bold").
+  const f = (name ?? '').replace(/^[A-Z]{6}\+/, '').toLowerCase()
+  return {
+    bold: /bold|black|heavy|semibold/.test(f),
+    italic: /italic|oblique/.test(f),
+  }
+}
+
+// pdf.js collapses getTextContent()'s `styles[fontName].fontFamily` to a generic
+// ("serif") that carries no weight or slant. The real font name — the one with
+// "-Bold" / "-Italic" — lives on the loaded font object in `commonObjs`, which
+// is populated only once the page's operator list has been parsed. In Text Mode
+// classifyPage does that before reflow runs, so the fonts are already there;
+// getPageText forces it when they aren't (see ensureStyle below).
+type FontObjs = { has(id: string): boolean; get(id: string): { name?: string } | null }
+
+function fontObjs(page: PDFPageProxy): FontObjs | undefined {
+  return (page as unknown as { commonObjs?: FontObjs }).commonObjs
+}
+
+function styleFromFont(page: PDFPageProxy, fontName: string): { bold: boolean; italic: boolean } {
+  try {
+    const objs = fontObjs(page)
+    if (objs && objs.has(fontName)) return styleOf(objs.get(fontName)?.name)
+  } catch {
+    // font object not resolved yet — leave unstyled
+  }
+  return { bold: false, italic: false }
 }
 
 export interface PageText {
   text: string
   runs: Run[]
+  /** Whether runs carry resolved bold/italic (needs the page's fonts loaded). */
+  styled?: boolean
 }
 
 export type TextCache = Map<number, PageText>
@@ -60,18 +96,56 @@ export function mul(a: number[], b: number[]): number[] {
  * its page proxy would otherwise cache the wrong page's text under the new
  * number, and every later read would return it. (That bug was real.)
  */
-export async function getPageText(page: PDFPageProxy, cache: TextCache): Promise<PageText> {
+export async function getPageText(
+  page: PDFPageProxy,
+  cache: TextCache,
+  ensureStyle = false,
+): Promise<PageText> {
   const no = page.pageNumber
   const hit = cache.get(no)
-  if (hit) return hit
+  // A styleless cache entry (e.g. from a search) can't satisfy a styled read —
+  // recompute so Text Mode's bold/italic aren't lost to whoever scanned first.
+  if (hit && (!ensureStyle || hit.styled)) return hit
 
   const content = await page.getTextContent()
+  if (ensureStyle) {
+    // Make sure every font we're about to read is resolved in commonObjs. Cheap
+    // in the common case: classifyPage has already parsed the op list, so this
+    // only forces a parse when nothing has loaded the fonts yet.
+    const objs = fontObjs(page)
+    let missing = !objs
+    if (objs) {
+      for (const item of content.items) {
+        if (!('str' in item)) continue
+        try {
+          if (!objs.has(item.fontName)) {
+            missing = true
+            break
+          }
+        } catch {
+          missing = true
+          break
+        }
+      }
+    }
+    if (missing) {
+      try {
+        await page.getOperatorList()
+      } catch {
+        // best effort: fall through and style what we can
+      }
+    }
+  }
+
   const runs: Run[] = []
   let text = ''
   for (const item of content.items) {
     if (!('str' in item)) continue // marked-content markers carry no text
     const start = text.length
     text += item.str
+    const { bold, italic } = ensureStyle
+      ? styleFromFont(page, item.fontName)
+      : { bold: false, italic: false }
     runs.push({
       start,
       end: text.length,
@@ -79,11 +153,13 @@ export async function getPageText(page: PDFPageProxy, cache: TextCache): Promise
       transform: item.transform,
       width: item.width,
       height: item.height,
+      bold,
+      italic,
     })
     // pdf.js signals a line break; a space keeps words from fusing across lines.
     if (item.hasEOL) text += ' '
   }
-  const pt = { text, runs }
+  const pt: PageText = { text, runs, styled: ensureStyle }
   cache.set(no, pt)
   return pt
 }
