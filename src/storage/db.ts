@@ -32,8 +32,8 @@ export interface Profile {
   imageDim?: number
   /** Crop the document's shared page margins so content fills the screen. */
   cropMargins?: boolean
-  /** 'paged' (tap to turn, zoom, highlight) or 'scroll' (continuous flow). */
-  viewMode?: 'paged' | 'scroll'
+  /** 'paged' (tap to turn), 'scroll' (continuous), or 'text' (reflow). */
+  viewMode?: 'paged' | 'scroll' | 'text'
   /** Show two pages side by side when the screen is landscape (paged mode). */
   spread?: boolean
   /** Last edit; the LWW key for sync. */

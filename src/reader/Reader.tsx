@@ -29,6 +29,7 @@ import {
 import { TextLayer, type TextSelection } from './TextLayer'
 import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
+import { TextReader, type TextFont } from './TextReader'
 import { exportDarkPdf, downloadBlob } from '../export/exportPdf'
 import {
   addBookmark,
@@ -223,7 +224,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** Doc-level content box for margin auto-crop; null until detected (or never). */
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [cropMargins, setCropMargins] = useState(true)
-  const [viewMode, setViewMode] = useState<'paged' | 'scroll'>('paged')
+  const [viewMode, setViewMode] = useState<'paged' | 'scroll' | 'text'>('paged')
+  // Text Mode reading prefs are personal comfort settings (device-global).
+  const [textSize, setTextSize] = useState(() => comfortNum('nocturne-textsize', 19))
+  const [textLeading, setTextLeading] = useState(() => comfortNum('nocturne-textleading', 1.6))
+  const [textFont, setTextFont] = useState<TextFont>(() =>
+    comfortBool('nocturne-textserif', true) ? 'serif' : 'sans',
+  )
   const [spread, setSpread] = useState(true)
   const [landscape, setLandscape] = useState(
     typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
@@ -350,9 +357,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
   // --- render the current page ----------------------------------------------
   const draw = useCallback(async () => {
-    // Scroll and spread each own their rendering; the single-page canvas stays
-    // hidden and must not re-render underneath them.
-    if (viewMode === 'scroll' || spreadActive) return
+    // Scroll, spread and text each own their rendering; the single-page canvas
+    // stays hidden and must not re-render underneath them.
+    if (viewMode === 'scroll' || viewMode === 'text' || spreadActive) return
     const doc = docRef.current
     const canvas = canvasRef.current
     const scroller = containerRef.current
@@ -795,10 +802,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-dim', String(dim))
       localStorage.setItem('nocturne-autohide', autoHide ? '1' : '0')
       localStorage.setItem('nocturne-haptics', haptics ? '1' : '0')
+      localStorage.setItem('nocturne-textsize', String(textSize))
+      localStorage.setItem('nocturne-textleading', String(textLeading))
+      localStorage.setItem('nocturne-textserif', textFont === 'serif' ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, autoHide, haptics])
+  }, [dim, autoHide, haptics, textSize, textLeading, textFont])
 
   // Keep the screen awake while reading — you shouldn't have to poke the phone
   // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
@@ -1297,6 +1307,22 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         />
       )}
 
+      {viewMode === 'text' && docVersion > 0 && docRef.current && (
+        <TextReader
+          doc={docRef.current}
+          pageCount={pageCount}
+          startPage={page}
+          fg={rgbCss(theme.fg)}
+          bg={chromeBg}
+          fontPx={textSize}
+          leading={textLeading}
+          family={textFont}
+          textCache={textCacheRef.current}
+          onPage={setPage}
+          onToggleChrome={() => setChrome((c) => !c)}
+        />
+      )}
+
       {spreadActive && docVersion > 0 && docRef.current && (
         <SpreadReader
           doc={docRef.current}
@@ -1320,7 +1346,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         style={{
           touchAction: 'pan-x pan-y',
           // Stay visible (showing "Loading…") until a replacement view can mount.
-          display: (viewMode === 'scroll' || spreadActive) && docVersion > 0 ? 'none' : undefined,
+          display:
+            (viewMode === 'scroll' || viewMode === 'text' || spreadActive) && docVersion > 0
+              ? 'none'
+              : undefined,
         }}
       >
         {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
@@ -1565,27 +1594,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               Layout
             </div>
             <div className="mb-2.5 flex rounded-xl bg-inset p-1">
-              <button
-                className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold ${
-                  viewMode === 'paged' ? 'bg-accent text-accent-on' : 'text-ink-mid'
-                }`}
-                onClick={() => setViewMode('paged')}
-              >
-                Paged
-              </button>
-              <button
-                className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold ${
-                  viewMode === 'scroll' ? 'bg-accent text-accent-on' : 'text-ink-mid'
-                }`}
-                onClick={() => setViewMode('scroll')}
-              >
-                Scroll
-              </button>
+              {(['paged', 'scroll', 'text'] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold capitalize ${
+                    viewMode === m ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                  }`}
+                  onClick={() => setViewMode(m)}
+                >
+                  {m}
+                </button>
+              ))}
             </div>
             <p className="mb-6 text-xs leading-relaxed text-ink-faint">
               {viewMode === 'paged'
-                ? 'Tap the sides to turn pages. Pinch to zoom; select text to copy or highlight.'
-                : 'Flow through the whole book by scrolling. Text select and highlight-making live in Paged mode.'}
+                ? 'The exact page. Tap the sides to turn; pinch to zoom; select text to copy or highlight.'
+                : viewMode === 'scroll'
+                  ? 'The exact pages, flowing as you scroll.'
+                  : 'Reflowed into your font and spacing — for prose. Flip to Paged for figure or scanned pages.'}
             </p>
 
             {viewMode === 'paged' && (
@@ -1603,9 +1629,70 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </label>
             )}
 
-            {/* Zoom is meaningless in the spread (pages are fit to the open
-                book), so it hides there. */}
-            {!spreadActive && (
+            {/* Text Mode: font, size, spacing — the reflow controls. */}
+            {viewMode === 'text' && (
+              <>
+                <div className="mb-2.5 flex rounded-xl bg-inset p-1">
+                  <button
+                    className={`flex-1 rounded-[9px] py-2 font-serif text-[15px] ${
+                      textFont === 'serif' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                    }`}
+                    onClick={() => setTextFont('serif')}
+                  >
+                    Serif
+                  </button>
+                  <button
+                    className={`flex-1 rounded-[9px] py-2 text-[13px] ${
+                      textFont === 'sans' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                    }`}
+                    onClick={() => setTextFont('sans')}
+                  >
+                    Sans
+                  </button>
+                </div>
+                <div className="mb-2 mt-5 flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Text size
+                  </span>
+                  <span className="text-xs tabular-nums text-ink-soft">{textSize}px</span>
+                </div>
+                <div className="mb-5 flex items-center gap-3.5">
+                  <span className="font-serif text-[13px] text-ink-soft">A</span>
+                  <input
+                    aria-label="Text size"
+                    type="range"
+                    min={14}
+                    max={30}
+                    step={1}
+                    value={textSize}
+                    onChange={(e) => setTextSize(Number(e.target.value))}
+                    className="cozy-range flex-1"
+                    style={{ '--fill': `${((textSize - 14) / 16) * 100}%` } as React.CSSProperties}
+                  />
+                  <span className="font-serif text-2xl text-ink-soft">A</span>
+                </div>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Line spacing
+                  </span>
+                  <span className="text-xs tabular-nums text-ink-soft">{textLeading.toFixed(2)}</span>
+                </div>
+                <input
+                  aria-label="Line spacing"
+                  type="range"
+                  min={1.3}
+                  max={2.2}
+                  step={0.05}
+                  value={textLeading}
+                  onChange={(e) => setTextLeading(Number(e.target.value))}
+                  className="cozy-range mb-8 w-full"
+                  style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
+                />
+              </>
+            )}
+
+            {/* Zoom applies to the page image (paged/scroll), not the spread or reflow. */}
+            {!spreadActive && viewMode !== 'text' && (
               <>
                 <div className="mb-2.5 flex items-center justify-between">
                   <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
@@ -1636,38 +1723,42 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </>
             )}
 
-            <div className="mb-2.5 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                Image brightness
-              </span>
-              <span className="text-xs tabular-nums text-ink-soft">
-                {Math.round(imageDim * 100)}%
-              </span>
-            </div>
-            <input
-              aria-label="Images"
-              type="range"
-              min={0.4}
-              max={1}
-              step={0.02}
-              value={imageDim}
-              onChange={(e) => setImageDim(Number(e.target.value))}
-              className="cozy-range mb-7 w-full"
-              style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
-            />
-
-            {cropBox && (
-              <label className="mb-7 flex cursor-pointer items-center justify-between">
-                <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                  Crop margins
-                </span>
+            {/* Image brightness & crop shape the page image; not used in reflow. */}
+            {viewMode !== 'text' && (
+              <>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                    Image brightness
+                  </span>
+                  <span className="text-xs tabular-nums text-ink-soft">
+                    {Math.round(imageDim * 100)}%
+                  </span>
+                </div>
                 <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-accent"
-                  checked={cropMargins}
-                  onChange={(e) => setCropMargins(e.target.checked)}
+                  aria-label="Images"
+                  type="range"
+                  min={0.4}
+                  max={1}
+                  step={0.02}
+                  value={imageDim}
+                  onChange={(e) => setImageDim(Number(e.target.value))}
+                  className="cozy-range mb-7 w-full"
+                  style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
                 />
-              </label>
+                {cropBox && (
+                  <label className="mb-7 flex cursor-pointer items-center justify-between">
+                    <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                      Crop margins
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-accent"
+                      checked={cropMargins}
+                      onChange={(e) => setCropMargins(e.target.checked)}
+                    />
+                  </label>
+                )}
+              </>
             )}
 
             {/* Screen: device/environment comfort, not per-book. */}
