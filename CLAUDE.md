@@ -154,7 +154,9 @@ src/
    paged pipeline via a shared GL context blitted per page; single-page paged
    mode stays the default and is untouched. Spread auto-activates in landscape
    (toggle in settings).
-9. **Text Mode** (reflow) for font/size/spacing on prose.
+9. ✅ **Text Mode** (reflow) — `engine/reflow.ts` reconstructs paragraphs from
+   the text layer; `reader/TextReader.tsx` streams them as a scrolling column
+   in your font/size/spacing. Digital PDFs only; scans need OCR (below).
 10. Vector export (rewrite colour operators; selectable text in the export).
 11. Scanned-PDF OCR path.
 
