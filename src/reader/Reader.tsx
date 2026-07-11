@@ -1328,6 +1328,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           startPage={page}
           fg={rgbCss(theme.fg)}
           bg={chromeBg}
+          theme={theme}
+          imageDim={imageDim}
           fontPx={textSize}
           leading={textLeading}
           family={fontStack(textFontId)}
@@ -1569,12 +1571,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="anim-fade fixed inset-0 z-30 bg-black/45"
             onClick={() => setShowSettings(false)}
           />
-          <div className="anim-panel fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line bg-panel p-6 pb-10 font-sans text-ink-body">
-            <div className="mb-7 flex items-center justify-between">
+          <div className="anim-panel fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line/70 bg-panel/90 p-5 pb-10 font-sans text-ink-body shadow-[-12px_0_48px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
+            <div className="mb-6 flex items-center justify-between">
               <div className="font-serif text-xl text-ink-bright">Reading settings</div>
               <button
                 aria-label="Close settings"
-                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
                 onClick={() => setShowSettings(false)}
               >
                 ✕
@@ -1584,26 +1586,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             <div className="mb-3.5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
               Theme
             </div>
-            <div className="mb-8 grid grid-cols-2 gap-3">
+            <div className="mb-8 grid grid-cols-2 gap-2.5">
               {THEMES.map((t) => (
-                <button key={t.id} className="text-left" onClick={() => setThemeId(t.id)}>
-                  <div
-                    className={`flex h-16 items-center rounded-xl border-2 px-4 ${
-                      t.id === themeId ? 'border-accent' : 'border-night-700'
-                    }`}
-                    style={{ background: rgbCss(t.bg) }}
-                  >
-                    <span className="font-serif text-xl" style={{ color: rgbCss(t.fg) }}>
-                      Aa
-                    </span>
-                  </div>
-                  <div
-                    className={`mt-1.5 text-[11px] ${
-                      t.id === themeId ? 'text-accent' : 'text-ink-soft'
-                    }`}
+                <button
+                  key={t.id}
+                  className={`flex h-12 items-center gap-2.5 rounded-xl border-2 px-3.5 text-left transition-transform active:scale-[0.97] ${
+                    t.id === themeId ? 'border-accent' : 'border-night-700'
+                  }`}
+                  style={{ background: rgbCss(t.bg) }}
+                  onClick={() => setThemeId(t.id)}
+                >
+                  <span className="font-serif text-lg leading-none" style={{ color: rgbCss(t.fg) }}>
+                    Aa
+                  </span>
+                  <span
+                    className="truncate text-[11px]"
+                    style={{ color: rgbCss(t.fg), opacity: 0.75 }}
                   >
                     {t.name}
-                  </div>
+                  </span>
                 </button>
               ))}
             </div>
@@ -1611,11 +1612,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
               Layout
             </div>
-            <div className="mb-2.5 flex rounded-xl bg-inset p-1">
+            <div className="flex rounded-xl bg-inset p-1">
               {(['paged', 'scroll', 'text'] as const).map((m) => (
                 <button
                   key={m}
-                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold capitalize ${
+                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold capitalize transition-colors ${
                     viewMode === m ? 'bg-accent text-accent-on' : 'text-ink-mid'
                   }`}
                   onClick={() => setViewMode(m)}
@@ -1624,7 +1625,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               ))}
             </div>
-            <p className="mb-6 text-xs leading-relaxed text-ink-faint">
+            <p className="mb-5 mt-2.5 px-1 text-xs leading-relaxed text-ink-faint">
               {viewMode === 'paged'
                 ? 'The exact page. Tap the sides to turn; pinch to zoom; select text to copy or highlight.'
                 : viewMode === 'scroll'
@@ -1633,18 +1634,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </p>
 
             {viewMode === 'paged' && (
-              <label className="mb-8 flex cursor-pointer items-center justify-between">
-                <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                  Two-page spread{' '}
-                  <span className="lowercase tracking-normal text-ink-faint">(landscape)</span>
+              <div className="mb-7 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+                <span className="text-[13px] text-ink-body">
+                  Two-page spread <span className="text-ink-faint">(landscape)</span>
                 </span>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-accent"
-                  checked={spread}
-                  onChange={(e) => setSpread(e.target.checked)}
-                />
-              </label>
+                <IosToggle checked={spread} onChange={setSpread} label="Two-page spread" />
+              </div>
             )}
 
             {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
@@ -1657,9 +1652,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   {TEXT_FONTS.map((f) => (
                     <button
                       key={f.id}
-                      className={`rounded-lg border px-3 py-2.5 text-left leading-tight ${
+                      className={`rounded-xl border px-3 py-2.5 text-left leading-tight transition-colors ${
                         textFontId === f.id
-                          ? 'border-accent text-ink-bright'
+                          ? 'border-accent bg-accent/10 text-ink-bright'
                           : 'border-line text-ink-mid'
                       }`}
                       style={{ fontFamily: f.stack }}
@@ -1670,45 +1665,48 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   ))}
                 </div>
 
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Text size
-                  </span>
-                  <span className="text-xs tabular-nums text-ink-soft">{textSize}px</span>
+                <div className="mb-6 divide-y divide-line/60 rounded-2xl bg-night-800/50">
+                  <div className="px-4 py-3">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13px] text-ink-body">Text size</span>
+                      <span className="text-xs tabular-nums text-ink-soft">{textSize}px</span>
+                    </div>
+                    <div className="flex items-center gap-3.5">
+                      <span className="font-serif text-[13px] text-ink-soft">A</span>
+                      <input
+                        aria-label="Text size"
+                        type="range"
+                        min={14}
+                        max={30}
+                        step={1}
+                        value={textSize}
+                        onChange={(e) => setTextSize(Number(e.target.value))}
+                        className="cozy-range flex-1"
+                        style={{ '--fill': `${((textSize - 14) / 16) * 100}%` } as React.CSSProperties}
+                      />
+                      <span className="font-serif text-2xl text-ink-soft">A</span>
+                    </div>
+                  </div>
+                  <div className="px-4 py-3">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13px] text-ink-body">Line spacing</span>
+                      <span className="text-xs tabular-nums text-ink-soft">
+                        {textLeading.toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      aria-label="Line spacing"
+                      type="range"
+                      min={1.3}
+                      max={2.2}
+                      step={0.05}
+                      value={textLeading}
+                      onChange={(e) => setTextLeading(Number(e.target.value))}
+                      className="cozy-range w-full"
+                      style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
+                    />
+                  </div>
                 </div>
-                <div className="mb-5 flex items-center gap-3.5">
-                  <span className="font-serif text-[13px] text-ink-soft">A</span>
-                  <input
-                    aria-label="Text size"
-                    type="range"
-                    min={14}
-                    max={30}
-                    step={1}
-                    value={textSize}
-                    onChange={(e) => setTextSize(Number(e.target.value))}
-                    className="cozy-range flex-1"
-                    style={{ '--fill': `${((textSize - 14) / 16) * 100}%` } as React.CSSProperties}
-                  />
-                  <span className="font-serif text-2xl text-ink-soft">A</span>
-                </div>
-
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Line spacing
-                  </span>
-                  <span className="text-xs tabular-nums text-ink-soft">{textLeading.toFixed(2)}</span>
-                </div>
-                <input
-                  aria-label="Line spacing"
-                  type="range"
-                  min={1.3}
-                  max={2.2}
-                  step={0.05}
-                  value={textLeading}
-                  onChange={(e) => setTextLeading(Number(e.target.value))}
-                  className="cozy-range mb-6 w-full"
-                  style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
-                />
 
                 <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
                   Reading width
@@ -1723,7 +1721,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   ).map(([label, w]) => (
                     <button
                       key={w}
-                      className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                      className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
                         textWidth === w ? 'bg-accent text-accent-on' : 'text-ink-mid'
                       }`}
                       onClick={() => setTextWidth(w)}
@@ -1738,7 +1736,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </div>
                 <div className="mb-4 flex rounded-xl bg-inset p-1">
                   <button
-                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
                       textPara === 'indent' ? 'bg-accent text-accent-on' : 'text-ink-mid'
                     }`}
                     onClick={() => setTextPara('indent')}
@@ -1746,7 +1744,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     Indented
                   </button>
                   <button
-                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium ${
+                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
                       textPara === 'spaced' ? 'bg-accent text-accent-on' : 'text-ink-mid'
                     }`}
                     onClick={() => setTextPara('spaced')}
@@ -1754,138 +1752,120 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     Spaced
                   </button>
                 </div>
-                <label className="mb-8 flex cursor-pointer items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Justify{' '}
-                    <span className="lowercase tracking-normal text-ink-faint">(+ hyphenate)</span>
+                <div className="mb-8 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+                  <span className="text-[13px] text-ink-body">
+                    Justify <span className="text-ink-faint">(+ hyphenate)</span>
                   </span>
-                  <input
-                    type="checkbox"
-                    aria-label="Justify text"
-                    className="h-4 w-4 accent-accent"
+                  <IosToggle
                     checked={textJustify}
-                    onChange={(e) => setTextJustify(e.target.checked)}
+                    onChange={setTextJustify}
+                    label="Justify text"
                   />
-                </label>
+                </div>
               </>
             )}
 
-            {/* Zoom applies to the page image (paged/scroll), not the spread or reflow. */}
-            {!spreadActive && viewMode !== 'text' && (
-              <>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Zoom
-                  </span>
-                  <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
-                </div>
-                <div className="mb-7 flex items-center gap-3.5">
-                  <span className="font-serif text-[13px] text-ink-soft">A</span>
-                  <input
-                    aria-label="Zoom"
-                    type="range"
-                    min={1}
-                    max={4}
-                    step={0.1}
-                    value={zoom}
-                    onChange={(e) => setZoom(Number(e.target.value))}
-                    className="cozy-range flex-1"
-                    style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
-                  />
-                  <span className="font-serif text-2xl text-ink-soft">A</span>
-                </div>
-                {viewMode === 'scroll' && (
-                  <p className="-mt-5 mb-7 text-xs leading-relaxed text-ink-faint">
-                    At 1× the whole page fits the screen; slide up to fill the width.
-                  </p>
-                )}
-              </>
-            )}
-
-            {/* Image brightness & crop shape the page image; not used in reflow. */}
+            {/* Page image: zoom (paged/scroll, not spread), brightness, crop —
+                grouped as one card; none of it applies to reflow. */}
             {viewMode !== 'text' && (
-              <>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                    Image brightness
-                  </span>
-                  <span className="text-xs tabular-nums text-ink-soft">
-                    {Math.round(imageDim * 100)}%
-                  </span>
-                </div>
-                <input
-                  aria-label="Images"
-                  type="range"
-                  min={0.4}
-                  max={1}
-                  step={0.02}
-                  value={imageDim}
-                  onChange={(e) => setImageDim(Number(e.target.value))}
-                  className="cozy-range mb-7 w-full"
-                  style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
-                />
-                {cropBox && (
-                  <label className="mb-7 flex cursor-pointer items-center justify-between">
-                    <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-                      Crop margins
-                    </span>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-accent"
-                      checked={cropMargins}
-                      onChange={(e) => setCropMargins(e.target.checked)}
-                    />
-                  </label>
+              <div className="mb-7 divide-y divide-line/60 rounded-2xl bg-night-800/50">
+                {!spreadActive && (
+                  <div className="px-4 py-3">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13px] text-ink-body">Zoom</span>
+                      <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+                    </div>
+                    <div className="flex items-center gap-3.5">
+                      <span className="font-serif text-[13px] text-ink-soft">A</span>
+                      <input
+                        aria-label="Zoom"
+                        type="range"
+                        min={1}
+                        max={4}
+                        step={0.1}
+                        value={zoom}
+                        onChange={(e) => setZoom(Number(e.target.value))}
+                        className="cozy-range flex-1"
+                        style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+                      />
+                      <span className="font-serif text-2xl text-ink-soft">A</span>
+                    </div>
+                    {viewMode === 'scroll' && (
+                      <p className="mt-2 text-xs leading-relaxed text-ink-faint">
+                        At 1× the whole page fits the screen; slide up to fill the width.
+                      </p>
+                    )}
+                  </div>
                 )}
-              </>
+                <div className="px-4 py-3">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[13px] text-ink-body">Image brightness</span>
+                    <span className="text-xs tabular-nums text-ink-soft">
+                      {Math.round(imageDim * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    aria-label="Images"
+                    type="range"
+                    min={0.4}
+                    max={1}
+                    step={0.02}
+                    value={imageDim}
+                    onChange={(e) => setImageDim(Number(e.target.value))}
+                    className="cozy-range w-full"
+                    style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
+                  />
+                </div>
+                {cropBox && (
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <span className="text-[13px] text-ink-body">Crop margins</span>
+                    <IosToggle
+                      checked={cropMargins}
+                      onChange={setCropMargins}
+                      label="Crop margins"
+                    />
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Screen: device/environment comfort, not per-book. */}
             <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Screen</div>
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-[13px] text-ink-body">Night dimmer</span>
-              <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
+            <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
+              <div className="px-4 py-3">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-[13px] text-ink-body">Night dimmer</span>
+                  <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
+                </div>
+                <input
+                  aria-label="Night dimmer"
+                  type="range"
+                  min={0}
+                  max={0.75}
+                  step={0.05}
+                  value={dim}
+                  onChange={(e) => setDim(Number(e.target.value))}
+                  className="cozy-range w-full"
+                  style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
+                />
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-[13px] text-ink-body">Auto-hide controls</span>
+                <IosToggle checked={autoHide} onChange={setAutoHide} label="Auto-hide controls" />
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-[13px] text-ink-body">
+                  Haptic page turns <span className="text-ink-faint">(Android/desktop)</span>
+                </span>
+                <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
+              </div>
             </div>
-            <input
-              aria-label="Night dimmer"
-              type="range"
-              min={0}
-              max={0.75}
-              step={0.05}
-              value={dim}
-              onChange={(e) => setDim(Number(e.target.value))}
-              className="cozy-range mb-2 w-full"
-              style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
-            />
-            <p className="mb-5 text-xs leading-relaxed text-ink-faint">
+            <p className="mb-7 mt-2 px-1 text-xs leading-relaxed text-ink-faint">
               Dims below the phone's minimum brightness for reading in the dark.
             </p>
-            <label className="mb-4 flex cursor-pointer items-center justify-between">
-              <span className="text-[13px] text-ink-body">Auto-hide controls</span>
-              <input
-                type="checkbox"
-                aria-label="Auto-hide controls"
-                className="h-4 w-4 accent-accent"
-                checked={autoHide}
-                onChange={(e) => setAutoHide(e.target.checked)}
-              />
-            </label>
-            <label className="mb-8 flex cursor-pointer items-center justify-between">
-              <span className="text-[13px] text-ink-body">
-                Haptic page turns{' '}
-                <span className="text-ink-faint">(Android/desktop)</span>
-              </span>
-              <input
-                type="checkbox"
-                aria-label="Haptics"
-                className="h-4 w-4 accent-accent"
-                checked={haptics}
-                onChange={(e) => setHaptics(e.target.checked)}
-              />
-            </label>
 
             <button
-              className="w-full rounded-xl border border-accent/40 py-3 text-sm font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+              className="w-full rounded-2xl bg-accent py-3.5 text-sm font-semibold text-accent-on transition-colors hover:bg-accent-hi disabled:opacity-50"
               disabled={!pageCount || exporting !== null}
               onClick={onExport}
             >
@@ -2155,4 +2135,35 @@ async function loadOutline(doc: PDFDocumentProxy): Promise<TocItem[]> {
   const root = (await doc.getOutline()) as OutlineNode[] | null
   if (root) await walk(root, 0)
   return out
+}
+
+// iOS-style switch for the settings drawer. A native <button> keeps the
+// keyboard/AT semantics (role="switch", Space/Enter); the knob is warm-white
+// so it reads as a physical control on the dark panel.
+function IosToggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`relative h-7 w-12 flex-none rounded-full transition-colors duration-200 ${
+        checked ? 'bg-accent' : 'bg-night-700'
+      }`}
+      onClick={() => onChange(!checked)}
+    >
+      <span
+        className={`absolute left-0 top-0.5 h-6 w-6 rounded-full bg-ink-bright shadow transition-transform duration-200 ${
+          checked ? 'translate-x-[22px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  )
 }

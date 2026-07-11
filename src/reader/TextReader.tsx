@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { PDFDocumentProxy } from '../engine/pdf'
+import type { PDFDocumentProxy, PDFPageProxy } from '../engine/pdf'
 import { getPageText, type TextCache } from '../engine/search'
 import { reconstructPage, stitch, type Block } from '../engine/reflow'
+import { Recolorizer } from '../engine/recolor'
+import { renderDarkPage } from '../engine/pipeline'
+import { classifyPage, type PageClassification } from '../engine/classify'
+import type { Theme } from '../engine/theme'
 
 // Text Mode: the reflow reader. Instead of showing the page image, it extracts
 // the text (digital PDFs only) and re-lays it in your font, size and spacing —
@@ -42,6 +46,8 @@ interface TextReaderProps {
   startPage: number
   fg: string
   bg: string
+  theme: Theme // for recoloring image-heavy pages
+  imageDim: number
   fontPx: number
   leading: number
   family: string // resolved CSS font-family stack
@@ -55,10 +61,15 @@ interface TextReaderProps {
   onToggleChrome: () => void
 }
 
-interface Item {
-  page: number
-  blocks: Block[]
-}
+// A page renders either as reflowed text (prose) or as its recolored image
+// (cover, title pages, figures, system screens) so nothing visual is lost.
+type Item =
+  | { page: number; kind: 'text'; blocks: Block[] }
+  | { page: number; kind: 'image'; canvas: HTMLCanvasElement; w: number; h: number }
+
+const SAT_CUT = 0.25
+/** Logical width to render page images at (displayed responsively). */
+const IMG_RENDER_W = 900
 
 export function TextReader({
   doc,
@@ -66,6 +77,8 @@ export function TextReader({
   startPage,
   fg,
   bg,
+  theme,
+  imageDim,
   fontPx,
   leading,
   family,
@@ -86,12 +99,68 @@ export function TextReader({
   const anchorRef = useRef<number | null>(null) // scrollHeight before a prepend
   const reportedRef = useRef(startPage)
 
+  // Offscreen GL context for recoloring image pages (never touches other views).
+  const glRef = useRef<HTMLCanvasElement | null>(null)
+  const recolorRef = useRef<Recolorizer | null>(null)
+  const imgSrcRef = useRef<HTMLCanvasElement | null>(null)
+  const clsRef = useRef(new Map<number, PageClassification>())
+  useEffect(() => {
+    const c = document.createElement('canvas')
+    glRef.current = c
+    imgSrcRef.current = document.createElement('canvas')
+    try {
+      recolorRef.current = new Recolorizer(c, /* preserveDrawingBuffer */ true)
+    } catch {
+      recolorRef.current = null
+    }
+    return () => {
+      recolorRef.current?.dispose()
+      recolorRef.current = null
+    }
+  }, [])
+
+  const renderPageImage = useCallback(
+    async (pdfPage: PDFPageProxy): Promise<Item | null> => {
+      const recolor = recolorRef.current
+      if (!recolor) return null
+      const vp = pdfPage.getViewport({ scale: 1 })
+      const dpr = Math.min(window.devicePixelRatio || 1, 3)
+      await renderDarkPage(pdfPage, IMG_RENDER_W / vp.width, dpr, recolor, {
+        theme,
+        satCut: SAT_CUT,
+        imageDim,
+        sourceCanvas: imgSrcRef.current ?? undefined,
+      })
+      const gl = glRef.current!
+      const out = document.createElement('canvas')
+      out.width = gl.width
+      out.height = gl.height
+      out.getContext('2d')!.drawImage(gl, 0, 0)
+      return { page: pdfPage.pageNumber, kind: 'image', canvas: out, w: IMG_RENDER_W, h: IMG_RENDER_W * (vp.height / vp.width) }
+    },
+    [theme, imageDim],
+  )
+
+  // Decide per page: reflow prose, but render image-heavy or near-textless
+  // pages (cover, title pages, figures, scans) as their recolored image so
+  // everything is preserved — only the prose is refonted.
   const reflowPage = useCallback(
     async (pageNo: number): Promise<Item> => {
-      const pt = await getPageText(await doc.getPage(pageNo), textCache)
-      return { page: pageNo, blocks: reconstructPage(pt) }
+      const pdfPage = await doc.getPage(pageNo)
+      let cls = clsRef.current.get(pageNo)
+      if (!cls) {
+        cls = await classifyPage(pdfPage)
+        clsRef.current.set(pageNo, cls)
+      }
+      const asImage = cls.textChars < 120 || cls.imageCoverage > 0.4 || cls.kind === 'scanned'
+      if (asImage) {
+        const img = await renderPageImage(pdfPage)
+        if (img) return img
+      }
+      const pt = await getPageText(pdfPage, textCache)
+      return { page: pageNo, kind: 'text', blocks: reconstructPage(pt) }
     },
-    [doc, textCache],
+    [doc, textCache, renderPageImage],
   )
 
   // Load ONCE at the page you were on (re-running on the doc, i.e. a new book).
@@ -104,26 +173,11 @@ export function TextReader({
     void (async () => {
       const first = await reflowPage(initialPageRef.current)
       if (!alive) return
-      if (first.blocks.length === 0) {
-        // Nothing on this page — try to find text nearby before giving up.
-        let found: Item | null = null
-        for (let d = 1; d <= 3 && !found; d++) {
-          for (const n of [initialPageRef.current + d, initialPageRef.current - d]) {
-            if (n < 1 || n > pageCount) continue
-            const it = await reflowPage(n)
-            if (it.blocks.length) {
-              found = it
-              break
-            }
-          }
-        }
-        if (!alive) return
-        if (found) {
-          setItems([found])
-          reportedRef.current = found.page
-        } else setEmpty(true)
-      } else {
+      // Image pages render; only a genuinely blank text page yields nothing.
+      if (first.kind === 'text' && first.blocks.length === 0) setEmpty(true)
+      else {
         setItems([first])
+        reportedRef.current = first.page
       }
     })()
     return () => {
@@ -149,7 +203,7 @@ export function TextReader({
       const it = await reflowPage(startPage)
       if (!alive) return
       setItems([it])
-      setEmpty(it.blocks.length === 0)
+      setEmpty(it.kind === 'text' && it.blocks.length === 0)
       requestAnimationFrame(() => {
         if (scrollerRef.current) scrollerRef.current.scrollTop = 0
       })
@@ -172,12 +226,13 @@ export function TextReader({
         const it = await reflowPage(next)
         setItems((cur) => {
           if (dir === 1) {
-            const merged = [...cur, it]
-            stitch(cur[cur.length - 1].blocks, it.blocks)
-            return merged
+            const prev = cur[cur.length - 1]
+            if (prev.kind === 'text' && it.kind === 'text') stitch(prev.blocks, it.blocks)
+            return [...cur, it]
           }
           anchorRef.current = scroller.scrollHeight // preserve position on prepend
-          stitch(it.blocks, cur[0].blocks)
+          const nextFirst = cur[0]
+          if (it.kind === 'text' && nextFirst.kind === 'text') stitch(it.blocks, nextFirst.blocks)
           return [it, ...cur]
         })
       } finally {
@@ -303,13 +358,24 @@ export function TextReader({
       >
         {items.map((it) => (
           <section key={it.page} data-textpage={it.page}>
-            {it.blocks.map((b, i) => {
+            {it.kind === 'image' ? (
+              <ImagePage item={it} />
+            ) : (
+              it.blocks.map((b, i) => {
               if (b.kind === 'h') {
+                // Short headings (chapter markers like "[ 1 ]") read best
+                // centered with room; longer section titles stay left.
+                const marker = b.text.length <= 24
                 return (
                   <h2
                     key={i}
-                    className="mb-4 mt-9 font-semibold"
-                    style={{ fontSize: '1.3em', lineHeight: 1.2, fontFamily, textAlign: 'left' }}
+                    className={marker ? 'mb-6 mt-12 opacity-80' : 'mb-4 mt-9 font-semibold'}
+                    style={{
+                      fontSize: marker ? '1.5em' : '1.3em',
+                      lineHeight: 1.2,
+                      fontFamily,
+                      textAlign: marker ? 'center' : 'left',
+                    }}
                   >
                     {b.text}
                   </h2>
@@ -332,7 +398,8 @@ export function TextReader({
                   {b.text}
                 </p>
               )
-            })}
+              })
+            )}
           </section>
         ))}
         {items.length > 0 && (
@@ -342,5 +409,29 @@ export function TextReader({
         )}
       </div>
     </div>
+  )
+}
+
+/** Renders a page's recolored image (cover, figure, system screen) in the flow. */
+function ImagePage({ item }: { item: Extract<Item, { kind: 'image' }> }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const host = ref.current
+    if (!host) return
+    host.replaceChildren()
+    item.canvas.style.width = '100%'
+    item.canvas.style.height = '100%'
+    item.canvas.style.display = 'block'
+    host.appendChild(item.canvas)
+    return () => {
+      if (host) host.replaceChildren()
+    }
+  }, [item.canvas])
+  return (
+    <div
+      ref={ref}
+      className="mx-auto my-6 overflow-hidden rounded shadow-2xl"
+      style={{ width: '100%', maxWidth: item.w, aspectRatio: `${item.w} / ${item.h}` }}
+    />
   )
 }

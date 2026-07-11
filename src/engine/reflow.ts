@@ -85,6 +85,13 @@ function median(nums: number[]): number {
 }
 
 const SENTENCE_END = /[.!?"'”’)\]]\s*$/
+// A chapter marker: a short isolated line that's a (possibly bracketed) number
+// or roman numeral, or "Chapter N" — e.g. DCC's "[ 1 ]". These aren't set in a
+// bigger font, so size-based heading detection misses them.
+const CHAPTER_MARKER = /^[[(]?\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]?$/i
+// A *bracketed* marker specifically — distinguishes a chapter number "[ 1 ]"
+// from a bare page number "42" (which should still be stripped as a footer).
+const BRACKET_MARKER = /^[[(]\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]$/i
 
 /** Reconstruct readable blocks from one page's extracted text. */
 export function reconstructPage(pt: PageText): Block[] {
@@ -103,10 +110,13 @@ export function reconstructPage(pt: PageText): Block[] {
   const span = Math.max(1, topY - bottomY)
 
   // Drop running headers / footers / page numbers: short lines hugging the top
-  // or bottom margin, or a bare page number anywhere near an edge.
+  // or bottom margin, or a bare page number anywhere near an edge. But KEEP a
+  // bracketed chapter marker like "[ 1 ]" (DCC) — those sit near the top and
+  // would otherwise be stripped, losing the chapter break.
   const body = lines.filter((l) => {
     const nearEdge = l.y > topY - span * 0.06 || l.y < bottomY + span * 0.06
     if (!nearEdge) return true
+    if (BRACKET_MARKER.test(l.text.trim())) return true
     const short = l.x1 - l.x0 < textWidth * 0.5
     const pageNumberish = /^[\divxlc]+$|^\d+\s*$/i.test(l.text)
     return !(short || pageNumberish)
@@ -152,7 +162,9 @@ export function reconstructPage(pt: PageText): Block[] {
 
   for (let i = 0; i < body.length; i++) {
     const line = body[i]
-    const heading = line.size > bodySize * 1.25
+    const heading =
+      line.size > bodySize * 1.25 ||
+      (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
     if (heading) {
       pushPara()
       blocks.push({ kind: 'h', text: line.text })
