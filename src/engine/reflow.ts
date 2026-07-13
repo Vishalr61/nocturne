@@ -174,6 +174,12 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
   const body = lines.filter((l) => {
     const nearEdge = l.y > topY - span * 0.06 || l.y < bottomY + span * 0.06
     if (!nearEdge) return true
+    // Display-size type near an edge is a chapter TITLE, not furniture: running
+    // headers are set at or below body size, chapter openers well above it.
+    // (Ender's Game sets "2 / Peter" at 24pt on a 10pt body, flush at the top
+    // margin — the edge filter was eating the whole chapter heading.) Same
+    // ratio as the heading classifier below, so what we keep, we style.
+    if (l.size > bodySize * 1.25) return true
     if (BRACKET_MARKER.test(l.text.trim())) return true
     const short = l.x1 - l.x0 < textWidth * 0.5
     const pageNumberish = /^[\divxlc]+$|^\d+\s*$/i.test(l.text)

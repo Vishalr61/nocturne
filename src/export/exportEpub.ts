@@ -195,6 +195,57 @@ function canvasJpeg(c: HTMLCanvasElement, quality: number): Promise<Uint8Array> 
   })
 }
 
+// ---- cover ------------------------------------------------------------------
+
+/**
+ * The book's cover for the EPUB: page 1's art when the book has a real cover
+ * page, otherwise a generated title card (dark ground, serif title) so the
+ * export never lands in a library grid as a blank tile.
+ */
+async function makeCover(doc: PDFDocumentProxy, title: string): Promise<Uint8Array> {
+  const page = await doc.getPage(1)
+  const vp = page.getViewport({ scale: 1 })
+  const cls = await classifyPage(page)
+  const coverIsArt = cls.imageRects.some(
+    (r) => (r.w * r.h) / (vp.width * vp.height) > 0.45,
+  )
+  if (coverIsArt) {
+    const canvas = await renderPageToCanvas(page, Math.max(1, 1200 / vp.width), 1)
+    return canvasJpeg(canvas, 0.85)
+  }
+
+  const c = document.createElement('canvas')
+  c.width = 1200
+  c.height = 1800
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = '#15110b'
+  ctx.fillRect(0, 0, c.width, c.height)
+  ctx.textAlign = 'center'
+  ctx.fillStyle = '#c9a56a'
+  ctx.font = '160px Georgia, serif'
+  ctx.fillText('☾', 600, 560)
+  // Wrap the title into short centred lines.
+  ctx.font = '600 92px Lora, Georgia, serif'
+  ctx.fillStyle = '#f3e8d3'
+  const words = (title || 'Untitled').split(/\s+/)
+  const lines: string[] = []
+  let cur = ''
+  for (const w of words) {
+    if ((cur + ' ' + w).trim().length > 18 && cur) {
+      lines.push(cur)
+      cur = w
+    } else {
+      cur = (cur + ' ' + w).trim()
+    }
+  }
+  if (cur) lines.push(cur)
+  lines.slice(0, 6).forEach((l, i) => ctx.fillText(l, 600, 800 + i * 120))
+  ctx.font = '44px Inter, sans-serif'
+  ctx.fillStyle = '#9a875f'
+  ctx.fillText('N O C T U R N E', 600, 1680)
+  return canvasJpeg(c, 0.85)
+}
+
 // ---- book assembly ----------------------------------------------------------
 
 interface Chapter {
@@ -210,8 +261,17 @@ function chapterize(blocks: Block[], imgs: Map<Block, EpubImage>): Chapter[] {
   for (const b of blocks) {
     if (b.kind === 'img' && !imgs.has(b)) continue
     if (b.kind === 'h') {
-      cur = { title: spansText(b.spans).trim() || `Chapter ${chapters.length + 1}`, blocks: [b] }
-      chapters.push(cur)
+      const title = spansText(b.spans).trim()
+      // A chapter often opens with stacked heading lines ("2" then "Peter") —
+      // one chapter titled "2 · Peter", not a chapter per line.
+      const prevIsBareHeading = cur && cur.blocks.every((x) => x.kind === 'h')
+      if (cur && prevIsBareHeading && cur.title !== 'Front matter') {
+        cur.title = [cur.title, title].filter(Boolean).join(' · ')
+        cur.blocks.push(b)
+      } else {
+        cur = { title: title || `Chapter ${chapters.length + 1}`, blocks: [b] }
+        chapters.push(cur)
+      }
     } else {
       if (!cur) {
         cur = { title: 'Front matter', blocks: [] }
@@ -347,7 +407,22 @@ export async function exportEpub(
       ? crypto.randomUUID()
       : `${Date.now()}-nocturne`
 
+  // Cover: page-1 art or a generated title card. Optional — a render failure
+  // costs the cover, never the book.
+  let cover: Uint8Array | null = null
+  try {
+    cover = await makeCover(doc, opts.title)
+  } catch {
+    cover = null
+  }
+
   const manifest = [
+    ...(cover
+      ? [
+          `<item id="cover-img" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>`,
+          `<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>`,
+        ]
+      : []),
     ...chapters.map(
       (_, i) => `<item id="c${i}" href="c${i}.xhtml" media-type="application/xhtml+xml"/>`,
     ),
@@ -358,7 +433,9 @@ export async function exportEpub(
       (f, i) => `<item id="img${i}" href="images/${f.file}" media-type="image/jpeg"/>`,
     ),
   ].join('\n  ')
-  const spine = chapters.map((_, i) => `<itemref idref="c${i}"/>`).join('')
+  const spine =
+    (cover ? '<itemref idref="cover"/>' : '') +
+    chapters.map((_, i) => `<itemref idref="c${i}"/>`).join('')
   const navList = chapters
     .map((c, i) => `<li><a href="c${i}.xhtml">${esc(c.title)}</a></li>`)
     .join('\n      ')
@@ -370,6 +447,7 @@ export async function exportEpub(
   <dc:title>${esc(opts.title || 'Untitled')}</dc:title>
   <dc:language>en</dc:language>
   <meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta>
+  ${cover ? '<meta name="cover" content="cover-img"/>' : ''}
  </metadata>
  <manifest>
   <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -416,6 +494,17 @@ export async function exportEpub(
   }
   for (const f of imageFiles) {
     files[`OEBPS/images/${f.file}`] = [f.data, { level: 0 }] // JPEG: same story
+  }
+  if (cover) {
+    files['OEBPS/cover.jpg'] = [cover, { level: 0 }]
+    files['OEBPS/cover.xhtml'] = strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Cover</title></head>
+<body style="margin:0;text-align:center">
+  <img src="cover.jpg" alt="Cover" style="max-width:100%;max-height:100%"/>
+</body>
+</html>`)
   }
   chapters.forEach((c, i) => {
     files[`OEBPS/c${i}.xhtml`] = strToU8(chapterXhtml(c, imgMap))

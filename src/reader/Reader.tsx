@@ -2143,7 +2143,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 <div>
                   <div className="text-[13px] text-ink-body">Dark PDF</div>
                   <div className="text-[11px] text-ink-faint">
-                    This theme, your image and crop settings — open in Books
+                    The exact pages in this theme — keeps the book's own font
                   </div>
                 </div>
                 <button
@@ -2161,7 +2161,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     Dark PDF, vector <span className="text-ink-faint">(beta)</span>
                   </div>
                   <div className="text-[11px] text-ink-faint">
-                    Selectable text, much smaller file
+                    Same pages, selectable text, much smaller file
                   </div>
                 </div>
                 <button
@@ -2181,7 +2181,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   <div className="text-[11px] text-ink-faint">
                     {epubErr
                       ? 'Needs a text layer — scans need OCR'
-                      : 'Reflowed prose in your reading font and spacing'}
+                      : 'The only format that takes your font, spacing and justify'}
                   </div>
                 </div>
                 <button
