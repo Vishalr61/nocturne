@@ -185,9 +185,11 @@ reading screenshots. The setup that works on this machine:
   to `chromium.launch()` (the default browser download is absent). WebGL2 works.
 - Emulate a phone: viewport 390×844, `device_scale_factor=3`; add
   `has_touch=True` for gesture tests (pinch via CDP `Input.dispatchTouchEvent`).
-- Load a book with `page.set_input_files("input[type=file]", pdf)`; a page has
-  finished rendering when the footer text contains `page:` (the classification
-  label). Set the React range sliders via the native value setter + an `input`
+- Load a book with `page.locator("input[type=file]").first.set_input_files(pdf)`
+  (there are two file inputs — import + restore backup); the book is loaded
+  once `button[aria-label='Reading settings']` appears. The classification
+  label (`page: …`) sits at the BOTTOM of the settings drawer, not the footer.
+  Set the React range sliders via the native value setter + an `input`
   event, not `fill()`.
 - Ground-truth page renders and test-PDF assembly: PyMuPDF in
   `~/patchpdf/backend/.venv/bin/python`.

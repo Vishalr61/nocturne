@@ -10,7 +10,7 @@ import {
 } from 'pdf-lib'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { Theme } from '../engine/theme'
-import { renderPageToCanvas } from '../engine/pdf'
+import { renderPageToCanvas, type CropBox } from '../engine/pdf'
 import { dominantLuma, DARK_PAGE_LUMA } from '../engine/pipeline'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
 
@@ -320,9 +320,9 @@ function rewriteForms(
 }
 
 /** Pages whose dominant tone is already dark — pass through, like the reader. */
-async function findDarkPages(doc: PDFDocumentProxy): Promise<Set<number>> {
+async function findDarkPages(doc: PDFDocumentProxy, from: number, to: number): Promise<Set<number>> {
   const dark = new Set<number>()
-  for (let p = 1; p <= doc.numPages; p++) {
+  for (let p = from; p <= to; p++) {
     const page = await doc.getPage(p)
     const thumb = await renderPageToCanvas(page, 0.12, 1)
     if (dominantLuma(thumb) < DARK_PAGE_LUMA) dark.add(p - 1)
@@ -412,13 +412,20 @@ export async function exportVectorPdf(
   opts: {
     theme: Theme
     satCut: number
+    /** Inclusive 1-based page range; defaults to the whole book. */
+    from?: number
+    to?: number
+    /** Margin auto-crop: applied as each page's CropBox (content untouched). */
+    crop?: CropBox | null
     highlights?: ExportHighlight[]
     textCache?: TextCache
     onProgress?: (done: number, total: number) => void
   },
 ): Promise<Blob> {
   const { theme, satCut } = opts
-  const darkPages = await findDarkPages(doc)
+  const from = Math.max(1, opts.from ?? 1)
+  const to = Math.min(doc.numPages, opts.to ?? doc.numPages)
+  const darkPages = await findDarkPages(doc, from, to)
 
   const pdf = await PDFDocument.load(srcBytes, { updateMetadata: false })
   const ctx = pdf.context
@@ -426,10 +433,24 @@ export async function exportVectorPdf(
   const visited = new Set<string>()
   const enc = new TextEncoder()
 
-  for (let idx = 0; idx < pages.length; idx++) {
-    opts.onProgress?.(idx, pages.length)
-    if (darkPages.has(idx)) continue
+  for (let idx = from - 1; idx <= to - 1 && idx < pages.length; idx++) {
+    opts.onProgress?.(idx - from + 1, to - from + 1)
     const page = pages[idx]
+
+    // Margin crop travels as the page's CropBox — viewers show the content
+    // box, the underlying page stays intact. crop.fy is a fraction from the
+    // TOP edge (viewport space); PDF boxes measure from the bottom.
+    if (opts.crop) {
+      const { x, y, width, height } = page.getMediaBox()
+      page.setCropBox(
+        x + opts.crop.fx * width,
+        y + (1 - opts.crop.fy - opts.crop.fh) * height,
+        opts.crop.fw * width,
+        opts.crop.fh * height,
+      )
+    }
+
+    if (darkPages.has(idx)) continue
 
     // Collect this page's content stream(s), decoded.
     const contentsRaw = page.node.get(PDFName.of('Contents'))
@@ -468,10 +489,18 @@ export async function exportVectorPdf(
     // Let the UI breathe on long books.
     await new Promise((r) => setTimeout(r, 0))
   }
-  if (opts.highlights?.length && opts.textCache) {
-    await addHighlightAnnots(pdf, doc, opts.highlights, opts.textCache)
+  // Annotate while every page still exists (highlight page numbers index the
+  // full document), then trim to the requested range.
+  const inRange = opts.highlights?.filter((h) => h.page >= from && h.page <= to)
+  if (inRange?.length && opts.textCache) {
+    await addHighlightAnnots(pdf, doc, inRange, opts.textCache)
   }
-  opts.onProgress?.(pages.length, pages.length)
+  if (from > 1 || to < pages.length) {
+    for (let i = pdf.getPageCount() - 1; i >= 0; i--) {
+      if (i < from - 1 || i > to - 1) pdf.removePage(i)
+    }
+  }
+  opts.onProgress?.(to - from + 1, to - from + 1)
 
   const saved = await pdf.save()
   const buf = new Uint8Array(saved.length)

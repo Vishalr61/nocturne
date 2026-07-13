@@ -1,5 +1,5 @@
 import { PDFDocument } from 'pdf-lib'
-import type { PDFDocumentProxy } from '../engine/pdf'
+import type { CropBox, PDFDocumentProxy } from '../engine/pdf'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import type { Theme } from '../engine/theme'
@@ -22,6 +22,13 @@ export interface ExportOptions {
   satCut: number
   dpi?: number // default 300
   quality?: number // JPEG quality 0..1, default 0.85
+  /** Inclusive 1-based page range; defaults to the whole book. */
+  from?: number
+  to?: number
+  /** Brightness of preserved images — the reader's "Image brightness" slider. */
+  imageDim?: number
+  /** Margin auto-crop, when the reader has it on. Pages shrink to the content box. */
+  crop?: CropBox | null
   onProgress?: (done: number, total: number) => void
 }
 
@@ -29,6 +36,9 @@ export async function exportDarkPdf(doc: PDFDocumentProxy, opts: ExportOptions):
   const dpi = opts.dpi ?? 300
   const quality = opts.quality ?? 0.85
   const renderScale = dpi / 72 // PDF user space is 72 units/inch
+  const from = Math.max(1, opts.from ?? 1)
+  const to = Math.min(doc.numPages, opts.to ?? doc.numPages)
+  const total = Math.max(0, to - from + 1)
 
   const out = await PDFDocument.create()
   const glCanvas = document.createElement('canvas')
@@ -36,28 +46,34 @@ export async function exportDarkPdf(doc: PDFDocumentProxy, opts: ExportOptions):
   const recolor = new Recolorizer(glCanvas, /* preserveDrawingBuffer */ true)
 
   try {
-    for (let i = 1; i <= doc.numPages; i++) {
+    for (let i = from; i <= to; i++) {
       const page = await doc.getPage(i)
 
       // dpr=1: renderScale already encodes the target DPI. Same pipeline as the
-      // live reader — polarity, image masking, colour text — so what you export
-      // is what you saw. (The pipeline clamps oversized pages to the canvas
-      // budget, so a large-format PDF at 300 DPI can't kill the tab.)
+      // live reader — polarity, image masking, colour text, image brightness,
+      // crop — so what you export is what you saw. (The pipeline clamps
+      // oversized pages to the canvas budget, so a large-format PDF at 300 DPI
+      // can't kill the tab.)
       await renderDarkPage(page, renderScale, 1, recolor, {
         theme: opts.theme,
         satCut: opts.satCut,
+        imageDim: opts.imageDim,
+        crop: opts.crop,
         sourceCanvas: srcCanvas,
       })
 
       const bytes = await canvasJpeg(glCanvas, quality)
       const jpg = await out.embedJpg(bytes)
 
-      // Output page keeps the original point dimensions; the hi-res image fills it.
+      // Output page keeps the original point dimensions (shrunk to the content
+      // box when cropping); the hi-res image fills it.
       const pts = page.getViewport({ scale: 1 })
-      const outPage = out.addPage([pts.width, pts.height])
-      outPage.drawImage(jpg, { x: 0, y: 0, width: pts.width, height: pts.height })
+      const w = pts.width * (opts.crop?.fw ?? 1)
+      const h = pts.height * (opts.crop?.fh ?? 1)
+      const outPage = out.addPage([w, h])
+      outPage.drawImage(jpg, { x: 0, y: 0, width: w, height: h })
 
-      opts.onProgress?.(i, doc.numPages)
+      opts.onProgress?.(i - from + 1, total)
       // Let the UI breathe between pages on long books.
       await new Promise((r) => setTimeout(r, 0))
     }
