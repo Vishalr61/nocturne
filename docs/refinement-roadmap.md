@@ -29,12 +29,16 @@ What shipped:
   `specified-fonts` switch) and ships line spacing / justify / paragraph style
   as its stylesheet. Your typography finally travels with the book.
 
+- ✅ **EPUB inline images.** Chapter-divider icons and inline figures (the
+  DCC case) are cropped from an original-colour page render and embedded as
+  JPEGs at their flow position.
+- ✅ **iOS delivery.** iOS never honoured `<a download>` on blob URLs, so no
+  export ever reached the phone. Exports there now go to the share sheet
+  (Save to Files / AirDrop / open in Books), with a "Ready — Share" row when
+  a long export outlives the tap's user activation.
+
 Remaining, to graduate the betas:
 
-- **P0 — EPUB inline images.** `chapterize()` still drops image blocks; DCC's
-  chapter icons vanish. Text Mode already crops + recolors inline
-  illustrations (`TextReader.renderInlineCrops`) — encode those crops as JPEGs
-  into the EPUB.
 - **P0 — EPUB TOC from the PDF outline.** Chapters currently come from the
   heading heuristic; when the PDF has a real outline, prefer it.
 - **P1 — EPUB metadata**: author, cover page (page 1 render as cover image).
