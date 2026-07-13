@@ -1338,6 +1338,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           justify: textJustify,
           para: textPara,
         },
+        // The author's own TOC, when the PDF has one, beats heading guesses.
+        outline: toc,
         onProgress: (done, total) => setEpubbing(done / total),
       })
       await deliver(blob, `${title || 'nocturne'}${spanTag(span)}.epub`)
@@ -1347,7 +1349,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     } finally {
       setEpubbing(null)
     }
-  }, [title, textFontId, textLeading, textJustify, textPara, exportSpan, deliver])
+  }, [title, textFontId, textLeading, textJustify, textPara, toc, exportSpan, deliver])
 
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))

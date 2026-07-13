@@ -251,6 +251,58 @@ async function makeCover(doc: PDFDocumentProxy, title: string): Promise<Uint8Arr
 interface Chapter {
   title: string
   blocks: Block[]
+  /** Title came from the PDF outline; synthesize an <h2> if the body lacks one. */
+  labelled?: boolean
+}
+
+/** An outline entry as the reader's Contents panel already resolves them. */
+export interface OutlineEntry {
+  title: string
+  page: number
+  depth?: number
+}
+
+/**
+ * Chapters cut at the PDF's own outline destinations — the author's TOC beats
+ * any heading heuristic. Only trusted when it yields real structure (≥2 cuts
+ * inside the range); otherwise the caller falls back to the heuristic.
+ */
+function chapterizeByOutline(
+  all: Block[],
+  imgs: Map<Block, EpubImage>,
+  pageOf: Map<Block, number>,
+  outline: OutlineEntry[],
+  from: number,
+  to: number,
+): Chapter[] {
+  const inRange = outline.filter((e) => e.page >= from && e.page <= to)
+  const top = inRange.filter((e) => (e.depth ?? 0) === 0)
+  const picked = (top.length >= 2 ? top : inRange).slice().sort((a, b) => a.page - b.page)
+  // At most one cut per page: same-page entries collapse into the first.
+  const cuts = picked.filter((e, i) => i === 0 || e.page !== picked[i - 1].page)
+  if (cuts.length < 2) return []
+
+  const chapters: Chapter[] = []
+  let cur: Chapter = { title: 'Front matter', blocks: [] }
+  chapters.push(cur)
+  let at = 0
+  for (const b of all) {
+    if (b.kind === 'img' && !imgs.has(b)) continue
+    const pg = pageOf.get(b) ?? from
+    while (at < cuts.length && pg >= cuts[at].page) {
+      cur = {
+        title: cuts[at].title.trim() || `Chapter ${chapters.length}`,
+        blocks: [],
+        labelled: true,
+      }
+      chapters.push(cur)
+      at++
+    }
+    cur.blocks.push(b)
+  }
+  return chapters.filter((c) =>
+    c.blocks.some((b) => b.kind === 'img' || spansText(b.spans).trim()),
+  )
 }
 
 /** Headings begin chapters; leading blocks before any heading are "front matter".
@@ -286,17 +338,22 @@ function chapterize(blocks: Block[], imgs: Map<Block, EpubImage>): Chapter[] {
 }
 
 function chapterXhtml(c: Chapter, imgs: Map<Block, EpubImage>): string {
-  const body = c.blocks
-    .map((b) => {
-      if (b.kind === 'img') {
-        const im = imgs.get(b)!
-        // Sized like Text Mode shows it: relative to the page width, floored
-        // so a small divider icon doesn't vanish at e-reader column widths.
-        const pct = Math.max(25, Math.min(100, Math.round(im.wf * 100)))
-        return `<div class="fig"><img src="images/${im.file}" style="width:${pct}%" alt=""/></div>`
-      }
-      return b.kind === 'h' ? `<h2>${spanHtml(b.spans)}</h2>` : `<p>${spanHtml(b.spans)}</p>`
-    })
+  // An outline-titled chapter whose page never set a display-size heading
+  // still deserves one — that's how publisher EPUBs read.
+  const lead = c.labelled && c.blocks[0]?.kind !== 'h' ? [`<h2>${esc(c.title)}</h2>`] : []
+  const body = lead
+    .concat(
+      c.blocks.map((b) => {
+        if (b.kind === 'img') {
+          const im = imgs.get(b)!
+          // Sized like Text Mode shows it: relative to the page width, floored
+          // so a small divider icon doesn't vanish at e-reader column widths.
+          const pct = Math.max(25, Math.min(100, Math.round(im.wf * 100)))
+          return `<div class="fig"><img src="images/${im.file}" style="width:${pct}%" alt=""/></div>`
+        }
+        return b.kind === 'h' ? `<h2>${spanHtml(b.spans)}</h2>` : `<p>${spanHtml(b.spans)}</p>`
+      }),
+    )
     .join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -318,6 +375,8 @@ export async function exportEpub(
     to?: number
     /** Text Mode typography — embedded font + stylesheet defaults. */
     style?: EpubTypography
+    /** The PDF's resolved outline; when present, chapters cut at its pages. */
+    outline?: OutlineEntry[]
     onProgress?: (done: number, total: number) => void
   },
 ): Promise<Blob> {
@@ -331,6 +390,7 @@ export async function exportEpub(
   const all: Block[] = []
   const imgMap = new Map<Block, EpubImage>()
   const imageFiles: { file: string; data: Uint8Array }[] = []
+  const pageOf = new Map<Block, number>() // for outline chapter cuts
   for (let p = from; p <= to; p++) {
     opts.onProgress?.(p - from, total)
     const page = await doc.getPage(p)
@@ -377,12 +437,16 @@ export async function exportEpub(
       }
     }
 
-    stitch(all, blocks)
+    stitch(all, blocks) // may absorb blocks[0] into the previous page's tail
+    for (const b of blocks) pageOf.set(b, p)
     all.push(...blocks)
     if (p % 10 === 0) await new Promise((r) => setTimeout(r, 0)) // let the UI breathe
   }
 
-  const chapters = chapterize(all, imgMap)
+  const byOutline = opts.outline?.length
+    ? chapterizeByOutline(all, imgMap, pageOf, opts.outline, from, to)
+    : []
+  const chapters = byOutline.length ? byOutline : chapterize(all, imgMap)
   const totalChars = all.reduce(
     (n, b) => n + (b.kind === 'img' ? 0 : spansText(b.spans).length),
     0,
