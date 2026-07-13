@@ -140,6 +140,11 @@ function comfortStr(key: string, fallback: string): string {
   }
 }
 
+/** iPadOS reports itself as MacIntel; the touch-points check catches it. */
+const isIOS = () =>
+  /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
 interface ReaderProps {
   bookId: string
   onShelf: () => void
@@ -200,6 +205,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
+  /** A finished export parked for a fresh tap to open the iOS share sheet. */
+  const [pendingSave, setPendingSave] = useState<{ blob: Blob; name: string } | null>(null)
+  const pendingSaveRef = useRef<{ blob: Blob; name: string } | null>(null)
+  pendingSaveRef.current = pendingSave
   /** Export scope: false = whole book, true = the from/to page range below. */
   const [exportRange, setExportRange] = useState(false)
   const [extractFrom, setExtractFrom] = useState(1)
@@ -1217,6 +1226,41 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setSearching(false)
   }, [])
 
+  // iOS ignores <a download> on blob URLs — completely, and doubly so when
+  // installed to the home screen — so exports there go to the share sheet
+  // (Save to Files, AirDrop, open in Books) instead. The sheet demands a
+  // user gesture; a long export outlives the Save tap's activation, so on
+  // rejection the file parks in `pendingSave` behind an explicit Share button.
+  const deliver = useCallback(async (blob: Blob, name: string) => {
+    const file = new File([blob], name, { type: blob.type })
+    const shareable =
+      isIOS() && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })
+    if (!shareable) {
+      downloadBlob(blob, name)
+      return
+    }
+    try {
+      await navigator.share({ files: [file], title: name })
+    } catch (e) {
+      if ((e as DOMException).name === 'AbortError') return // sheet dismissed by the user
+      setPendingSave({ blob, name })
+    }
+  }, [])
+
+  const sharePending = useCallback(async () => {
+    const p = pendingSaveRef.current
+    if (!p) return
+    const file = new File([p.blob], p.name, { type: p.blob.type })
+    try {
+      await navigator.share({ files: [file], title: p.name })
+      setPendingSave(null)
+    } catch (e) {
+      if ((e as DOMException).name === 'AbortError') return // keep it ready for another go
+      downloadBlob(p.blob, p.name) // last resort
+      setPendingSave(null)
+    }
+  }, [])
+
   // The from/to span every export honours (null = whole book), plus the
   // filename tag so ranged files say what they are.
   const exportSpan = useCallback((): { from: number; to: number } | null => {
@@ -1244,11 +1288,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         to: span?.to,
         onProgress: (done, total) => setExporting(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'} (dark)${spanTag(span)}.pdf`)
+      await deliver(blob, `${title || 'nocturne'} (dark)${spanTag(span)}.pdf`)
     } finally {
       setExporting(null)
     }
-  }, [themeId, title, imageDim, cropMargins, cropBox, exportSpan])
+  }, [themeId, title, imageDim, cropMargins, cropBox, exportSpan, deliver])
 
   const onVectorExport = useCallback(async () => {
     const doc = docRef.current
@@ -1268,11 +1312,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         textCache: textCacheRef.current,
         onProgress: (done, total) => setVexporting(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'} (dark, vector)${spanTag(span)}.pdf`)
+      await deliver(blob, `${title || 'nocturne'} (dark, vector)${spanTag(span)}.pdf`)
     } finally {
       setVexporting(null)
     }
-  }, [bookId, themeId, title, marks, cropMargins, cropBox, exportSpan])
+  }, [bookId, themeId, title, marks, cropMargins, cropBox, exportSpan, deliver])
 
   const onEpubExport = useCallback(async () => {
     const doc = docRef.current
@@ -1296,14 +1340,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         },
         onProgress: (done, total) => setEpubbing(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'}${spanTag(span)}.epub`)
+      await deliver(blob, `${title || 'nocturne'}${spanTag(span)}.epub`)
     } catch {
       setEpubErr(true)
       setTimeout(() => setEpubErr(false), 3000)
     } finally {
       setEpubbing(null)
     }
-  }, [title, textFontId, textLeading, textJustify, textPara, exportSpan])
+  }, [title, textFontId, textLeading, textJustify, textPara, exportSpan, deliver])
 
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))
@@ -1313,14 +1357,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       const book = await getBook(bookId)
       if (!book) return
       const blob = await extractPages(book.data, from, to)
-      downloadBlob(blob, `${title || 'nocturne'} p${from}-${to}.pdf`)
+      await deliver(blob, `${title || 'nocturne'} p${from}-${to}.pdf`)
     } catch {
       setExtractErr(true)
       setTimeout(() => setExtractErr(false), 2500)
     } finally {
       setExtracting(false)
     }
-  }, [extractFrom, extractTo, pageCount, bookId, title])
+  }, [extractFrom, extractTo, pageCount, bookId, title, deliver])
 
   // Seed the extract range with wherever you are when the drawer opens.
   useEffect(() => {
@@ -2069,6 +2113,31 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
               </div>
             )}
+            {/* A long export outlives its tap's user activation, so the share
+                sheet can't open by itself — the finished file waits here. */}
+            {pendingSave && (
+              <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-night-800/50 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] text-ink-body">{pendingSave.name}</div>
+                  <div className="text-[11px] text-ink-faint">Ready — send it to Files or Books</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi"
+                    onClick={() => void sharePending()}
+                  >
+                    Share…
+                  </button>
+                  <button
+                    aria-label="Discard export"
+                    className="flex h-7 w-7 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                    onClick={() => setPendingSave(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="mt-3 divide-y divide-line/60 rounded-2xl bg-night-800/50">
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
@@ -2228,7 +2297,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   className="rounded-lg border border-line bg-inset px-3 py-1.5 text-xs text-ink-soft transition-colors hover:text-ink-body"
                   onClick={() => {
                     const md = notesMarkdown(title, bookmarks, marks)
-                    downloadBlob(
+                    void deliver(
                       new Blob([md], { type: 'text/markdown' }),
                       `${title || 'nocturne'} — notes.md`,
                     )
