@@ -200,6 +200,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
+  /** Export scope: false = whole book, true = the from/to page range below. */
+  const [exportRange, setExportRange] = useState(false)
   const [extractFrom, setExtractFrom] = useState(1)
   const [extractTo, setExtractTo] = useState(1)
   const [extracting, setExtracting] = useState(false)
@@ -1215,60 +1217,93 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setSearching(false)
   }, [])
 
+  // The from/to span every export honours (null = whole book), plus the
+  // filename tag so ranged files say what they are.
+  const exportSpan = useCallback((): { from: number; to: number } | null => {
+    if (!exportRange) return null
+    return {
+      from: Math.max(1, Math.min(extractFrom, extractTo)),
+      to: Math.min(pageCount || 1, Math.max(extractFrom, extractTo)),
+    }
+  }, [exportRange, extractFrom, extractTo, pageCount])
+  const spanTag = (span: { from: number; to: number } | null) =>
+    span ? ` p${span.from}-${span.to}` : ''
+
   const onExport = useCallback(async () => {
     const doc = docRef.current
     if (!doc) return
     setExporting(0)
+    const span = exportSpan()
     try {
       const blob = await exportDarkPdf(doc, {
         theme: themeById(themeId),
         satCut: SAT_CUT,
+        imageDim,
+        crop: cropMargins ? cropBox : null,
+        from: span?.from,
+        to: span?.to,
         onProgress: (done, total) => setExporting(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'} (dark).pdf`)
+      downloadBlob(blob, `${title || 'nocturne'} (dark)${spanTag(span)}.pdf`)
     } finally {
       setExporting(null)
     }
-  }, [themeId, title])
+  }, [themeId, title, imageDim, cropMargins, cropBox, exportSpan])
 
   const onVectorExport = useCallback(async () => {
     const doc = docRef.current
     if (!doc) return
     setVexporting(0)
+    const span = exportSpan()
     try {
       const book = await getBook(bookId)
       if (!book) return
       const blob = await exportVectorPdf(doc, book.data, {
         theme: themeById(themeId),
         satCut: SAT_CUT,
+        crop: cropMargins ? cropBox : null,
+        from: span?.from,
+        to: span?.to,
         highlights: marks,
         textCache: textCacheRef.current,
         onProgress: (done, total) => setVexporting(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'} (dark, vector).pdf`)
+      downloadBlob(blob, `${title || 'nocturne'} (dark, vector)${spanTag(span)}.pdf`)
     } finally {
       setVexporting(null)
     }
-  }, [bookId, themeId, title, marks])
+  }, [bookId, themeId, title, marks, cropMargins, cropBox, exportSpan])
 
   const onEpubExport = useCallback(async () => {
     const doc = docRef.current
     if (!doc) return
     setEpubbing(0)
+    const span = exportSpan()
     try {
       const blob = await exportEpub(doc, {
         title,
         textCache: textCacheRef.current,
+        from: span?.from,
+        to: span?.to,
+        // The Text Mode setup travels with the book: embedded face + spacing.
+        style: {
+          fontId: textFontId,
+          fontName: (TEXT_FONTS.find((f) => f.id === textFontId) ?? TEXT_FONTS[0]).name,
+          stack: fontStack(textFontId),
+          leading: textLeading,
+          justify: textJustify,
+          para: textPara,
+        },
         onProgress: (done, total) => setEpubbing(done / total),
       })
-      downloadBlob(blob, `${title || 'nocturne'}.epub`)
+      downloadBlob(blob, `${title || 'nocturne'}${spanTag(span)}.epub`)
     } catch {
       setEpubErr(true)
       setTimeout(() => setEpubErr(false), 3000)
     } finally {
       setEpubbing(null)
     }
-  }, [title])
+  }, [title, textFontId, textLeading, textJustify, textPara, exportSpan])
 
   const onExtract = useCallback(async () => {
     const from = Math.max(1, Math.min(extractFrom, extractTo))
@@ -1957,12 +1992,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 <span className="text-[13px] text-ink-body">Auto-hide controls</span>
                 <IosToggle checked={autoHide} onChange={setAutoHide} label="Auto-hide controls" />
               </div>
-              <div className="flex items-center justify-between px-4 py-3">
-                <span className="text-[13px] text-ink-body">
-                  Haptic page turns <span className="text-ink-faint">(Android/desktop)</span>
-                </span>
-                <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
-              </div>
+              {/* iOS Safari has no Vibration API — a toggle that can't do
+                  anything shouldn't exist there. */}
+              {'vibrate' in navigator && (
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-[13px] text-ink-body">
+                    Haptic page turns <span className="text-ink-faint">(a tiny buzz)</span>
+                  </span>
+                  <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
+                </div>
+              )}
             </div>
             <p className="mb-5 mt-2 px-1 text-xs leading-relaxed text-ink-faint">
               Dims below the phone's minimum brightness for reading in the dark.
@@ -1986,17 +2025,56 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
-            {/* One labelled menu, one explanation per row — four look-alike
-                buttons in a stack read as noise. */}
+            {/* One export model: choose the scope (whole book or a page
+                range), then a format. Every format follows the current reading
+                setup — theme, image brightness, crop, Text Mode type — so what
+                you save is what you saw. */}
             <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
               Export
             </div>
-            <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
+            <div className="flex rounded-xl bg-inset p-1">
+              {([false, true] as const).map((r) => (
+                <button
+                  key={String(r)}
+                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold transition-colors ${
+                    exportRange === r ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                  }`}
+                  onClick={() => setExportRange(r)}
+                >
+                  {r ? 'Page range' : 'Whole book'}
+                </button>
+              ))}
+            </div>
+            {exportRange && (
+              <div className="mt-2.5 flex items-center gap-2 px-1">
+                <input
+                  aria-label="Export from page"
+                  type="number"
+                  min={1}
+                  max={pageCount || 1}
+                  value={extractFrom}
+                  onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
+                  className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                />
+                <span className="text-xs text-ink-soft">to</span>
+                <input
+                  aria-label="Export to page"
+                  type="number"
+                  min={1}
+                  max={pageCount || 1}
+                  value={extractTo}
+                  onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
+                  className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                />
+                <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
+              </div>
+            )}
+            <div className="mt-3 divide-y divide-line/60 rounded-2xl bg-night-800/50">
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
                   <div className="text-[13px] text-ink-body">Dark PDF</div>
                   <div className="text-[11px] text-ink-faint">
-                    The exact pages in this theme — open in Books
+                    This theme, your image and crop settings — open in Books
                   </div>
                 </div>
                 <button
@@ -2034,7 +2112,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   <div className="text-[11px] text-ink-faint">
                     {epubErr
                       ? 'Needs a text layer — scans need OCR'
-                      : 'Reflowed prose for any e-reader'}
+                      : 'Reflowed prose in your reading font and spacing'}
                   </div>
                 </div>
                 <button
@@ -2046,46 +2124,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               </div>
 
-              <div className="px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[13px] text-ink-body">Extract pages</div>
-                    <div className="text-[11px] text-ink-faint">
-                      {extractErr
-                        ? 'Couldn’t extract from this PDF'
-                        : 'A page range as its own original PDF'}
-                    </div>
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div>
+                  <div className="text-[13px] text-ink-body">Original pages</div>
+                  <div className="text-[11px] text-ink-faint">
+                    {extractErr
+                      ? 'Couldn’t extract from this PDF'
+                      : exportRange
+                        ? 'The untouched pages — share a chapter'
+                        : 'Pick a page range above to share a chapter'}
                   </div>
-                  <button
-                    className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-                    disabled={!pageCount || extracting}
-                    onClick={() => void onExtract()}
-                  >
-                    {extracting ? '…' : 'Save'}
-                  </button>
                 </div>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <input
-                    aria-label="Extract from page"
-                    type="number"
-                    min={1}
-                    max={pageCount || 1}
-                    value={extractFrom}
-                    onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
-                    className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
-                  />
-                  <span className="text-xs text-ink-soft">to</span>
-                  <input
-                    aria-label="Extract to page"
-                    type="number"
-                    min={1}
-                    max={pageCount || 1}
-                    value={extractTo}
-                    onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
-                    className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
-                  />
-                  <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
-                </div>
+                <button
+                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
+                  disabled={!pageCount || extracting || !exportRange}
+                  onClick={() => void onExtract()}
+                >
+                  {extracting ? '…' : 'Save'}
+                </button>
               </div>
             </div>
 
