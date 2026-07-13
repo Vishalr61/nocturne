@@ -15,6 +15,12 @@ import {
 // EPUB, a prose book becomes reflowable in every reader app there is. Only
 // honest for digital prose: scans have no text layer, and figure-heavy
 // layouts lose their figures (that's what the PDF exports are for).
+//
+// The book ships in YOUR reading setup: the Text Mode face is embedded (WOFF,
+// the widest e-reader support) and line spacing / justification / paragraph
+// style become the stylesheet defaults — so the export opens looking like the
+// app, not like the destination reader's defaults. Readers can still override,
+// as EPUB readers always can.
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -29,6 +35,136 @@ function spanHtml(spans: Span[]): string {
     })
     .join('')
 }
+
+// ---- typography -------------------------------------------------------------
+
+/** The Text Mode typography carried into the EPUB's stylesheet. */
+export interface EpubTypography {
+  /** TEXT_FONTS id — selects which bundled faces to embed. */
+  fontId: string
+  /** Family name for @font-face rules (e.g. 'Lora'). */
+  fontName: string
+  /** Full CSS fallback stack from TEXT_FONTS. */
+  stack: string
+  leading: number
+  justify: boolean
+  para: 'indent' | 'spaced'
+}
+
+type FaceKey = 'regular' | 'italic' | 'bold' | 'boldItalic'
+
+// Lazy URL imports of the app's self-hosted reading faces — resolved and
+// fetched only at export time, so they cost nothing until then. Each family's
+// heavier cut (600/700) is declared as CSS `bold` so <strong> lands on it.
+const FONT_FILES: Record<string, Record<FaceKey, () => Promise<{ default: string }>>> = {
+  lora: {
+    regular: () => import('@fontsource/lora/files/lora-latin-400-normal.woff'),
+    italic: () => import('@fontsource/lora/files/lora-latin-400-italic.woff'),
+    bold: () => import('@fontsource/lora/files/lora-latin-600-normal.woff'),
+    boldItalic: () => import('@fontsource/lora/files/lora-latin-600-italic.woff'),
+  },
+  literata: {
+    regular: () => import('@fontsource/literata/files/literata-latin-400-normal.woff'),
+    italic: () => import('@fontsource/literata/files/literata-latin-400-italic.woff'),
+    bold: () => import('@fontsource/literata/files/literata-latin-600-normal.woff'),
+    boldItalic: () => import('@fontsource/literata/files/literata-latin-600-italic.woff'),
+  },
+  merriweather: {
+    regular: () => import('@fontsource/merriweather/files/merriweather-latin-400-normal.woff'),
+    italic: () => import('@fontsource/merriweather/files/merriweather-latin-400-italic.woff'),
+    bold: () => import('@fontsource/merriweather/files/merriweather-latin-600-normal.woff'),
+    boldItalic: () => import('@fontsource/merriweather/files/merriweather-latin-600-italic.woff'),
+  },
+  inter: {
+    regular: () => import('@fontsource/inter/files/inter-latin-400-normal.woff'),
+    italic: () => import('@fontsource/inter/files/inter-latin-400-italic.woff'),
+    bold: () => import('@fontsource/inter/files/inter-latin-600-normal.woff'),
+    boldItalic: () => import('@fontsource/inter/files/inter-latin-600-italic.woff'),
+  },
+  atkinson: {
+    regular: () =>
+      import('@fontsource/atkinson-hyperlegible/files/atkinson-hyperlegible-latin-400-normal.woff'),
+    italic: () =>
+      import('@fontsource/atkinson-hyperlegible/files/atkinson-hyperlegible-latin-400-italic.woff'),
+    bold: () =>
+      import('@fontsource/atkinson-hyperlegible/files/atkinson-hyperlegible-latin-700-normal.woff'),
+    boldItalic: () =>
+      import('@fontsource/atkinson-hyperlegible/files/atkinson-hyperlegible-latin-700-italic.woff'),
+  },
+  dyslexic: {
+    regular: () => import('@fontsource/opendyslexic/files/opendyslexic-latin-400-normal.woff'),
+    italic: () => import('@fontsource/opendyslexic/files/opendyslexic-latin-400-italic.woff'),
+    bold: () => import('@fontsource/opendyslexic/files/opendyslexic-latin-700-normal.woff'),
+    boldItalic: () => import('@fontsource/opendyslexic/files/opendyslexic-latin-700-italic.woff'),
+  },
+}
+
+interface EmbeddedFace {
+  file: string // filename inside OEBPS/fonts/
+  data: Uint8Array
+  weight: 'normal' | 'bold'
+  style: 'normal' | 'italic'
+}
+
+async function loadFontFaces(fontId: string): Promise<EmbeddedFace[]> {
+  const files = FONT_FILES[fontId]
+  if (!files) return []
+  const specs: [FaceKey, EmbeddedFace['weight'], EmbeddedFace['style']][] = [
+    ['regular', 'normal', 'normal'],
+    ['italic', 'normal', 'italic'],
+    ['bold', 'bold', 'normal'],
+    ['boldItalic', 'bold', 'italic'],
+  ]
+  const faces: EmbeddedFace[] = []
+  for (const [key, weight, style] of specs) {
+    const url = (await files[key]()).default
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`font fetch failed: ${url}`)
+    faces.push({
+      file: `${key === 'boldItalic' ? 'bold-italic' : key}.woff`,
+      data: new Uint8Array(await res.arrayBuffer()),
+      weight,
+      style,
+    })
+  }
+  return faces
+}
+
+function styleCss(style: EpubTypography | undefined, faces: EmbeddedFace[]): string {
+  if (!style) {
+    // No typography passed: the plain, reader-controlled stylesheet.
+    return `body { line-height: 1.5; } h2 { page-break-before: always; }
+p { margin: 0 0 0.6em; text-indent: 0; }`
+  }
+  const fontFaces = faces
+    .map(
+      (f) =>
+        `@font-face { font-family: '${style.fontName}'; font-weight: ${f.weight}; ` +
+        `font-style: ${f.style}; src: url('fonts/${f.file}') format('woff'); }`,
+    )
+    .join('\n')
+  const para =
+    style.para === 'spaced'
+      ? 'p { margin: 0 0 0.9em; text-indent: 0; }'
+      : 'p { margin: 0; text-indent: 1.3em; }\nh2 + p { text-indent: 0; }'
+  const justify = style.justify
+    ? '\np { text-align: justify; -webkit-hyphens: auto; hyphens: auto; }'
+    : ''
+  return `${fontFaces}
+body { font-family: ${style.stack}; line-height: ${style.leading}; }
+h2 { page-break-before: always; }
+${para}${justify}`
+}
+
+// Apple Books ignores publisher fonts unless this switch is present.
+const APPLE_DISPLAY_OPTIONS = `<?xml version="1.0" encoding="UTF-8"?>
+<display_options>
+  <platform name="*">
+    <option name="specified-fonts">true</option>
+  </platform>
+</display_options>`
+
+// ---- book assembly ----------------------------------------------------------
 
 interface Chapter {
   title: string
@@ -76,13 +212,22 @@ export async function exportEpub(
   opts: {
     title: string
     textCache: TextCache
+    /** Inclusive 1-based page range; defaults to the whole book. */
+    from?: number
+    to?: number
+    /** Text Mode typography — embedded font + stylesheet defaults. */
+    style?: EpubTypography
     onProgress?: (done: number, total: number) => void
   },
 ): Promise<Blob> {
-  // Reconstruct the whole book's prose, joining paragraphs across pages.
+  const from = Math.max(1, opts.from ?? 1)
+  const to = Math.min(doc.numPages, opts.to ?? doc.numPages)
+  const total = Math.max(1, to - from + 1)
+
+  // Reconstruct the range's prose, joining paragraphs across pages.
   const all: Block[] = []
-  for (let p = 1; p <= doc.numPages; p++) {
-    opts.onProgress?.(p - 1, doc.numPages)
+  for (let p = from; p <= to; p++) {
+    opts.onProgress?.(p - from, total)
     const page = await doc.getPage(p)
     const pt = await getPageText(page, opts.textCache, true)
     const blocks = reconstructPage(pt)
@@ -100,14 +245,30 @@ export async function exportEpub(
     throw new Error('This book has no usable text layer (a scan needs OCR first).')
   }
 
+  // Embed the reading font; a fetch failure degrades to the CSS stack alone
+  // (destination fallbacks) rather than failing the export.
+  let faces: EmbeddedFace[] = []
+  if (opts.style) {
+    try {
+      faces = await loadFontFaces(opts.style.fontId)
+    } catch {
+      faces = []
+    }
+  }
+
   const uuid =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-nocturne`
 
-  const manifest = chapters
-    .map((_, i) => `<item id="c${i}" href="c${i}.xhtml" media-type="application/xhtml+xml"/>`)
-    .join('\n  ')
+  const manifest = [
+    ...chapters.map(
+      (_, i) => `<item id="c${i}" href="c${i}.xhtml" media-type="application/xhtml+xml"/>`,
+    ),
+    ...faces.map(
+      (f, i) => `<item id="font${i}" href="fonts/${f.file}" media-type="font/woff"/>`,
+    ),
+  ].join('\n  ')
   const spine = chapters.map((_, i) => `<itemref idref="c${i}"/>`).join('')
   const navList = chapters
     .map((c, i) => `<li><a href="c${i}.xhtml">${esc(c.title)}</a></li>`)
@@ -149,22 +310,26 @@ export async function exportEpub(
   </rootfiles>
 </container>`
 
-  const css = `body { line-height: 1.5; } h2 { page-break-before: always; }
-p { margin: 0 0 0.6em; text-indent: 0; }`
-
   const files: Record<string, Uint8Array | [Uint8Array, { level: 0 }]> = {
     // Spec: `mimetype` must be first and stored uncompressed.
     mimetype: [strToU8('application/epub+zip'), { level: 0 }],
     'META-INF/container.xml': strToU8(container),
     'OEBPS/content.opf': strToU8(opf),
     'OEBPS/nav.xhtml': strToU8(nav),
-    'OEBPS/style.css': strToU8(css),
+    'OEBPS/style.css': strToU8(styleCss(opts.style, faces)),
+  }
+  if (faces.length) {
+    files['META-INF/com.apple.ibooks.display-options.xml'] = strToU8(APPLE_DISPLAY_OPTIONS)
+    for (const f of faces) {
+      // WOFF is already compressed; storing it beats deflating it again.
+      files[`OEBPS/fonts/${f.file}`] = [f.data, { level: 0 }]
+    }
   }
   chapters.forEach((c, i) => {
     files[`OEBPS/c${i}.xhtml`] = strToU8(chapterXhtml(c))
   })
 
-  opts.onProgress?.(doc.numPages, doc.numPages)
+  opts.onProgress?.(total, total)
   const zipped = zipSync(files)
   const buf = new Uint8Array(zipped.length)
   buf.set(zipped)
