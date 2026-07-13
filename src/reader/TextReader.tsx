@@ -97,6 +97,8 @@ export function TextReader({
   fontPxRef.current = fontPx
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [items, setItems] = useState<Item[]>([])
+  const itemsRef = useRef<Item[]>([])
+  itemsRef.current = items
   const [empty, setEmpty] = useState(false)
   const loadingRef = useRef(false)
   const anchorRef = useRef<number | null>(null) // scrollHeight before a prepend
@@ -244,6 +246,39 @@ export function TextReader({
   reflowPageRef.current = reflowPage
   const startPageRef = useRef(startPage)
   startPageRef.current = startPage
+
+  // A theme / image-brightness change must REPAINT the canvases already in the
+  // column (image pages, inline crops) — they were rendered under the old
+  // palette and would otherwise stay stale: a dark goblin icon left floating
+  // on a Paper page. The text column needs nothing (it recolors via CSS), and
+  // scroll position holds because every replacement keeps its box size. This
+  // is deliberately NOT a reload — see the load-once effect below.
+  const paletteRef = useRef({ theme, imageDim })
+  useEffect(() => {
+    if (paletteRef.current.theme === theme && paletteRef.current.imageDim === imageDim) return
+    paletteRef.current = { theme, imageDim }
+    let alive = true
+    void (async () => {
+      const repainted = new Map<number, Item>()
+      for (const it of itemsRef.current) {
+        if (!alive) return
+        if (it.kind === 'image') {
+          const fresh = await renderPageImage(await doc.getPage(it.page))
+          if (fresh) repainted.set(it.page, fresh)
+        } else if (it.crops?.size) {
+          const imgBlocks = it.blocks.filter((b): b is ImageBlock => b.kind === 'img')
+          const crops = await renderInlineCrops(await doc.getPage(it.page), imgBlocks)
+          if (crops) repainted.set(it.page, { ...it, crops })
+        }
+      }
+      if (alive && repainted.size) {
+        setItems((cur) => cur.map((it) => repainted.get(it.page) ?? it))
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [theme, imageDim, doc, renderPageImage, renderInlineCrops])
 
   // Load ONCE per document (a new book), at the page you were on. Crucially NOT
   // on startPage (TextReader reports its own page as you scroll) nor reflowPage

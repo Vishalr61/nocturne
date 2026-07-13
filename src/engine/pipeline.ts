@@ -108,6 +108,11 @@ export function finishDarkPage(
     mask = paintMask([...declared, ...found], source.width, source.height)
   }
 
+  // Dimming exists to seat a bright image against a dark ground. On a light
+  // theme (Paper) it just greys the picture — and its preserve-rect shows as
+  // a grey box on the pale page — so skip it there.
+  const bgLuma =
+    0.2126 * opts.theme.bg[0] + 0.7152 * opts.theme.bg[1] + 0.0722 * opts.theme.bg[2]
   recolor.render(source, source.width, source.height, {
     theme: opts.theme,
     satCut: opts.satCut,
@@ -115,7 +120,7 @@ export function finishDarkPage(
     inkFlip,
     colorText,
     mask,
-    imageDim: opts.imageDim ?? IMAGE_DIM,
+    imageDim: bgLuma > 0.5 ? 1 : (opts.imageDim ?? IMAGE_DIM),
   })
   return { source, cls, inkFlipped: inkFlip, dpr: dprUsed }
 }
