@@ -36,12 +36,17 @@ What shipped:
   export ever reached the phone. Exports there now go to the share sheet
   (Save to Files / AirDrop / open in Books), with a "Ready — Share" row when
   a long export outlives the tap's user activation.
+- ✅ **EPUB TOC from the PDF outline.** When the PDF has a real outline its
+  destinations cut the chapters (DCC: 'Chapter 1', 'Part I', …); the heading
+  heuristic stays as the fallback. Chapter openers survive reflow (display-
+  size edge lines are titles, URL watermarks are not), stacked heading lines
+  merge ('2 · Peter'), and every EPUB gets a cover — page-1 art or a
+  generated title card.
 
 Remaining, to graduate the betas:
 
-- **P0 — EPUB TOC from the PDF outline.** Chapters currently come from the
-  heading heuristic; when the PDF has a real outline, prefer it.
-- **P1 — EPUB metadata**: author, cover page (page 1 render as cover image).
+- **P1 — EPUB metadata**: author field; watermark body text ('OceanofPDF.com'
+  mid-page) needs the repeated-line furniture detector from §2.
 - **P1 — Vector export gaps**: Separation (`sc/scn` 1-component) tints and
   shading dictionaries pass through unmapped. Books that use spot colour still
   come out patchy; this is the graduation blocker for making vector the
