@@ -181,7 +181,8 @@ Rendering work is validated by driving the real app in headless Chromium and
 reading screenshots. The setup that works on this machine:
 
 - Python Playwright (`/opt/homebrew/opt/python@3.12/bin/python3.12`); pass
-  `executable_path=~/Library/Caches/ms-playwright/chromium_headless_shell-1228/…/chrome-headless-shell`
+  `executable_path=~/Library/Caches/ms-playwright/chromium_headless_shell-*/…/chrome-headless-shell`
+  (glob for the build — the number changes when Playwright updates)
   to `chromium.launch()` (the default browser download is absent). WebGL2 works.
 - Emulate a phone: viewport 390×844, `device_scale_factor=3`; add
   `has_touch=True` for gesture tests (pinch via CDP `Input.dispatchTouchEvent`).

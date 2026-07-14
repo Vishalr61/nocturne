@@ -65,7 +65,7 @@ export async function collectLocal(sinceHigh: number): Promise<LocalRecord[]> {
         naturalKey: natProgress(p.bookId),
         updatedAt: p.updatedAt,
         deleted: false,
-        body: { t: 'progress', bookId: p.bookId, page: p.page, percent: p.percent },
+        body: { t: 'progress', bookId: p.bookId, page: p.page, percent: p.percent, offset: p.offset },
       })
     }
   }
@@ -173,6 +173,7 @@ export async function applyRemote(body: Record<string, unknown>): Promise<number
           bookId,
           page: Number(body.page) || 1,
           percent: Number(body.percent) || 0,
+          offset: typeof body.offset === 'number' ? body.offset : undefined,
           updatedAt,
         })
       }

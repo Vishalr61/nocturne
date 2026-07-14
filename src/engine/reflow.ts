@@ -138,6 +138,8 @@ const CHAPTER_MARKER = /^[[(]?\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]?$
 // A *bracketed* marker specifically — distinguishes a chapter number "[ 1 ]"
 // from a bare page number "42" (which should still be stripped as a footer).
 const BRACKET_MARKER = /^[[(]\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]$/i
+/** Distributor watermarks ("OceanofPDF.com") masquerade as display type. */
+const URLISH = /(?:https?:\/\/|www\.|\.(?:com|net|org|io|co)\b)/i
 
 /**
  * Reconstruct readable blocks from one page's extracted text. `imageRects`
@@ -179,7 +181,9 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
     // (Ender's Game sets "2 / Peter" at 24pt on a 10pt body, flush at the top
     // margin — the edge filter was eating the whole chapter heading.) Same
     // ratio as the heading classifier below, so what we keep, we style.
-    if (l.size > bodySize * 1.25) return true
+    // Watermark stamps are the exception: "OceanofPDF.com" is also set big
+    // near an edge, but a URL is never a chapter title.
+    if (l.size > bodySize * 1.25 && !URLISH.test(l.text)) return true
     if (BRACKET_MARKER.test(l.text.trim())) return true
     const short = l.x1 - l.x0 < textWidth * 0.5
     const pageNumberish = /^[\divxlc]+$|^\d+\s*$/i.test(l.text)
@@ -254,7 +258,7 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
     const line = body[i]
     emitImagesAbove(line.y)
     const heading =
-      line.size > bodySize * 1.25 ||
+      (line.size > bodySize * 1.25 && !URLISH.test(line.text)) ||
       (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
     if (heading) {
       pushPara()

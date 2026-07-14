@@ -36,6 +36,13 @@ interface ContinuousReaderProps {
   /** Current page (controlled): a jump scrolls here; scrolling reports back. */
   page: number
   onPage: (page: number) => void
+  /** Exact strip position to restore on first layout, in page units
+   *  (scrollTop/slotHeight). Consumed once; ignored if it disagrees with
+   *  `page` by more than a page (stale offset from another mode/device). */
+  initialOffset?: number | null
+  /** Reports the strip position (page units) as the user scrolls, throttled —
+   *  the parent persists it so reopening lands on the exact line. */
+  onOffset?: (offset: number) => void
   onToggleChrome: () => void
   textCache: TextCache
   highlights: Highlight[]
@@ -59,6 +66,8 @@ export function ContinuousReader({
   onZoom,
   page,
   onPage,
+  initialOffset,
+  onOffset,
   onToggleChrome,
   textCache,
   highlights,
@@ -81,6 +90,16 @@ export function ContinuousReader({
   const lastReported = useRef<number | null>(null)
   const prevSlotHeight = useRef(0)
   const releaseRef = useRef<number | undefined>(undefined)
+  // Restore position captured at mount, consumed by the first layout only.
+  const initialOffsetRef = useRef<number | null>(initialOffset ?? null)
+  // The strip position in page units — scale-free, so a slot-height change
+  // (zoom, rotate, crop box arriving) can re-anchor to the exact spot.
+  const lastOffsetPages = useRef<number | null>(null)
+  // Trailing throttle for offset reports (a Dexie write per scroll frame is waste).
+  const onOffsetRef = useRef(onOffset)
+  onOffsetRef.current = onOffset
+  const offsetPending = useRef(0)
+  const offsetTimer = useRef<number | undefined>(undefined)
 
   const [dims, setDims] = useState({ w: 0, h: 0 })
   const [aspect, setAspect] = useState(0) // page height / width, uniform estimate
@@ -185,6 +204,16 @@ export function ContinuousReader({
       const w = windowFor(top)
       return v.from === w.from && v.to === w.to ? v : w
     })
+    // Track the exact strip position (jumps included — that IS the position),
+    // trailing-throttled so persistence isn't hammered per scroll frame.
+    offsetPending.current = top / slotHeight
+    lastOffsetPages.current = top / slotHeight
+    if (offsetTimer.current === undefined) {
+      offsetTimer.current = window.setTimeout(() => {
+        offsetTimer.current = undefined
+        onOffsetRef.current?.(offsetPending.current)
+      }, 400)
+    }
     if (programmaticScroll.current) return
     const mid = top + scroller.clientHeight / 2
     const current = Math.min(pageCount, Math.max(1, Math.floor(mid / slotHeight) + 1))
@@ -244,12 +273,12 @@ export function ContinuousReader({
 
   // The one place that scrolls the strip programmatically. Suppresses reporting
   // until the scroll settles, and sets the render window for the destination.
-  const scrollToPage = useCallback(
-    (p: number) => {
+  const scrollToTop = useCallback(
+    (top: number) => {
       const scroller = scrollerRef.current
       if (!scroller || !slotHeight) return
-      const top = (p - 1) * slotHeight
       programmaticScroll.current = true
+      lastOffsetPages.current = top / slotHeight
       scroller.scrollTo({ top })
       setVisible(windowFor(top))
       window.clearTimeout(releaseRef.current)
@@ -258,6 +287,10 @@ export function ContinuousReader({
       }, 200)
     },
     [slotHeight, windowFor],
+  )
+  const scrollToPage = useCallback(
+    (p: number) => scrollToTop((p - 1) * slotHeight),
+    [slotHeight, scrollToTop],
   )
 
   // The single owner of programmatic scrolling. Three cases, in priority:
@@ -274,14 +307,31 @@ export function ContinuousReader({
     prevSlotHeight.current = slotHeight
     if (firstLayout) {
       lastReported.current = page
-      scrollToPage(page)
+      // Exact-position resume: land on the line you left, not the page top —
+      // but only when the saved offset agrees with `page` (it goes stale when
+      // paged mode or another device moved the position since).
+      const off = initialOffsetRef.current
+      initialOffsetRef.current = null // consume once
+      const ch = scrollerRef.current?.clientHeight ?? 0
+      const offMid =
+        off != null ? Math.floor((off * slotHeight + ch / 2) / slotHeight) + 1 : null
+      if (off != null && offMid != null && Math.abs(offMid - page) <= 1) {
+        scrollToTop(off * slotHeight)
+      } else {
+        scrollToPage(page)
+      }
     } else if (slotChanged) {
-      scrollToPage(lastReported.current ?? page)
+      // Re-anchor to the exact fractional spot (page units are scale-free) —
+      // snapping to the page top here is what used to lose your place on
+      // zoom, rotate, and the async crop-box arrival right after resume.
+      const frac = lastOffsetPages.current
+      if (frac != null) scrollToTop(frac * slotHeight)
+      else scrollToPage(lastReported.current ?? page)
     } else if (page !== lastReported.current) {
       lastReported.current = page
       scrollToPage(page)
     }
-  }, [page, slotHeight, scrollToPage])
+  }, [page, slotHeight, scrollToPage, scrollToTop])
 
   // Render (and evict) canvases to match the visible window. Renders are
   // serialized on one chain because they share the GL + source canvases.
