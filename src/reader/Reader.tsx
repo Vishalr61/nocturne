@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   clampRenderDpr,
   openPdf,
@@ -193,6 +193,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [title, setTitle] = useState('')
   const [page, setPage] = useState(1)
   const [pageCount, setPageCount] = useState(0)
+  /** Scroll mode's exact strip position (page units) — persisted so reopening
+   *  lands on the very line you left, not the page top. */
+  const [scrollOff, setScrollOff] = useState<number | null>(null)
+  /** Footer stat readout: percent through the book, or pages left in chapter. */
+  const [footerStat, setFooterStat] = useState<'percent' | 'chapter'>(() =>
+    comfortStr('nocturne-footerstat', 'percent') === 'chapter' ? 'chapter' : 'percent',
+  )
   const [themeId, setThemeId] = useState(DEFAULT_THEME.id)
   const [imageDim, setImageDim] = useState(0.82)
   const [zoom, setZoom] = useState(1)
@@ -342,6 +349,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setSpread(profile.spread ?? true)
       }
       setPage(progress?.page ?? 1)
+      setScrollOff(progress?.offset ?? null)
       setDocVersion((v) => v + 1)
       setBusy(false)
       void touchBook(bookId)
@@ -802,17 +810,26 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [zoom])
 
   // --- persist look + position -------------------------------------------------
+  // Split: position changes on every scroll tick, look only on settings taps —
+  // one combined effect would rewrite the profile row per scroll.
   useEffect(() => {
     const id = loadedIdRef.current
     if (!id) return
     void saveProfile({ bookId: id, themeId, satCut: SAT_CUT, strength: 1, zoom, imageDim, cropMargins, viewMode, spread })
+  }, [themeId, imageDim, zoom, cropMargins, viewMode, spread])
+  useEffect(() => {
+    const id = loadedIdRef.current
+    if (!id) return
     void saveProgress({
       bookId: id,
       page,
       percent: pageCount ? page / pageCount : 0,
+      // Only scroll mode has a sub-page position; elsewhere clear it so a
+      // stale offset can't tug a later scroll-mode open away from `page`.
+      offset: viewMode === 'scroll' && scrollOff != null ? scrollOff : undefined,
       updatedAt: Date.now(),
     })
-  }, [themeId, imageDim, zoom, page, pageCount, cropMargins, viewMode, spread])
+  }, [page, pageCount, scrollOff, viewMode])
 
   // A faint tick on page turn. iOS Safari doesn't expose the Vibration API, so
   // this is silent on iPhone and fires on Android/desktop Chrome.
@@ -843,10 +860,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textwidth', String(textWidth))
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
+      localStorage.setItem('nocturne-footerstat', footerStat)
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara])
+  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat])
 
   // Keep the screen awake while reading — you shouldn't have to poke the phone
   // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
@@ -1409,6 +1427,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const hairline = 'color-mix(in srgb, currentColor 14%, transparent)'
   const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
 
+  // Pages left in the current chapter: distance to the next outline
+  // destination (any depth). Null when the book has no outline.
+  const chapterLeft = useMemo(() => {
+    if (!toc.length || !pageCount) return null
+    let next: number | null = null
+    for (const t of toc) {
+      if (t.page > page && (next === null || t.page < next)) next = t.page
+    }
+    return (next ?? pageCount + 1) - page
+  }, [toc, page, pageCount])
+
   return (
     <div
       className="anim-fade relative flex h-full flex-col font-sans"
@@ -1499,6 +1528,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           onZoom={setZoom}
           page={page}
           onPage={setPage}
+          initialOffset={scrollOff}
+          onOffset={setScrollOff}
           onToggleChrome={() => setChrome((c) => !c)}
           textCache={textCacheRef.current}
           highlights={marks}
@@ -1724,9 +1755,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             />
           )}
 
-          <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
-            {pageCount ? `${Math.round((page / pageCount) * 100)}%` : ''}
-          </span>
+          <button
+            className="whitespace-nowrap text-xs tabular-nums opacity-50 transition-opacity hover:opacity-90"
+            aria-label="Switch between percent and pages left in chapter"
+            onClick={() =>
+              chapterLeft != null && setFooterStat((s) => (s === 'percent' ? 'chapter' : 'percent'))
+            }
+          >
+            {footerStat === 'chapter' && chapterLeft != null
+              ? `${chapterLeft} left in ch.`
+              : pageCount
+                ? `${Math.round((page / pageCount) * 100)}%`
+                : ''}
+          </button>
 
           {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
             <button

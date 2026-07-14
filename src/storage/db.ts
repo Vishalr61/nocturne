@@ -44,6 +44,9 @@ export interface Progress {
   bookId: string
   page: number
   percent: number
+  /** Scroll mode's exact strip position, in page units (scrollTop/slotHeight).
+   *  Restores the very line you left, not just the page top. */
+  offset?: number
   updatedAt: number
 }
 
