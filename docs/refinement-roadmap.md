@@ -79,12 +79,33 @@ job is harder (reconstruction from layout), so the play is different:
 
 It won a full day of reading; it deserves the finish work:
 
-- Position memory at sub-page precision (restore the exact scroll offset,
-  not the page top).
-- Chapter-aware footer: "Ch. 12 — 4 pages left" (Kindle's most-loved detail;
-  we have the outline already).
+- ✅ Position memory at sub-page precision — reopening restores the exact
+  scroll offset (synced, guarded against stale offsets from other modes),
+  and zoom/rotate/crop re-anchors keep the fractional spot instead of
+  snapping to the page top.
+- ✅ Chapter-aware footer: tap the percent readout to cycle to "N left in
+  ch." (next outline destination), choice remembered.
 - Snappier zoom: scroll mode re-renders on zoom commit; pinch should feel as
   live as paged mode's.
+
+## 3b. EPUB input — worth it, but after Text Mode trust
+
+Today Nocturne opens PDFs only. Should it read EPUBs too? Assessment:
+
+- **Against**: EPUBs don't have the problem Nocturne exists to solve — every
+  EPUB reader already reflows with your fonts and themes, and Apple Books
+  does it well. The recolor engine adds zero value for EPUBs.
+- **For**: one library, one set of typography settings, one sync of
+  positions/highlights — the reading-life argument, not a rendering one.
+  And the cost is lower than it looks: an EPUB is pre-reflowed perfect
+  blocks, which is exactly what TextReader renders. Parse (fflate +
+  DOMParser, both already available) → blocks → the same column. No
+  classification, no OCR, no trust problem.
+- **Sequencing**: the Text Mode trust work IS the EPUB engine — block-based
+  reading, structure handling, position model beyond page numbers. Do that
+  first, then EPUB input is a parser plus a `format` field in the library
+  (progress/highlights need a chapter+offset position model, which touches
+  sync). Slot: after §2, before OCR.
 
 ## 4. Read aloud — professional grade (P1, parked until wanted)
 
