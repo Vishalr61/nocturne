@@ -183,6 +183,12 @@ blocked item — positions and highlights should follow you.
   dots would be redundant.
 - ✅ **Library**: sort (recent / title / progress), per-book size on the
   tile, install-app button (real prompt on Chromium, steps on iOS).
+- ✅ **Design "Reading Room"** (picked from three mockup directions,
+  lightened per feedback): the current book's blurred cover lights the
+  home behind a centered hero; reader chrome floats as theme-derived glass
+  pills (back / actions / scrubber capsule), so toggling chrome never
+  reflows the page. Floating chrome sits at z-24 — above the text layers,
+  still under the night dimmer.
 
 ## Explicitly not doing
 
