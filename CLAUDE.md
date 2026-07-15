@@ -140,7 +140,9 @@ src/
    through), structural masking of declared XObject rects, content-derived
    masking for photos inside full-page bitmaps, colour-text lightness flip.
 4. ✅ Library shelf (thumbnails, progress, delete, persistent storage) +
-   launch-into-last-book + immersive chrome toggle + pinch-to-zoom.
+   immersive chrome toggle + pinch-to-zoom. (Launch originally resumed the
+   last book; since 2026-07-15 it always opens the shelf — the shelf hero's
+   Resume is the one-tap continue.)
 5. ✅ Search (in-book streaming + highlights, library filter), bookmarks,
    rename/derived titles, library backup & restore.
 6. 🟡 **Sync reading state** (not bytes) — built + verified, awaiting a

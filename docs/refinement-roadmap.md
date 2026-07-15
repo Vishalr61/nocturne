@@ -164,11 +164,14 @@ blocked item — positions and highlights should follow you.
 - **Custom theme editor**: bg/fg pickers on the existing THEMES model.
 - **Tap-zone preferences**: left-tap-forward option (one-handed reading).
 - **Search**: diacritic-insensitive matching, recent searches.
-- ✅ **Dictionary lookup**: select a word (select mode) → Define. Offline
+- ✅ **Dictionary lookup**: select a word → Define, in every view. Offline
   WordNet 3.1, sharded under `public/dict/en/` (~9.5MB, fetched per letter
   on first use, cache-first in the SW — never precached), lemmatization for
-  irregulars and inflections (`engine/dict.ts`). Open: lookup from scroll
-  mode and Text Mode needs text selection there first.
+  irregulars and inflections (`engine/dict.ts`). Paged mode keeps the "T"
+  select mode (taps turn pages there); scroll mode mounts the text layer
+  always-on (long-press selects, no mode) and offers highlights too; Text
+  Mode reads the DOM selection (define/copy — reflowed text has no page
+  range for a highlight to persist against).
 - **Highlights**: a second colour + margin dots in scroll mode.
 - **Library**: sort (recent / title / progress), storage usage per book.
 
