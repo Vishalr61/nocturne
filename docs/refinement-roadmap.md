@@ -61,19 +61,29 @@ exception) — but heuristics fail silently, and one mangled paragraph costs all
 trust. Kindle never has this problem because it renders publisher EPUBs; our
 job is harder (reconstruction from layout), so the play is different:
 
-- **Confidence, not bravado.** Score each page's reconstruction (unmatched
-  glyphs, suspicious joins, line-width variance). Low-confidence pages render
-  as the recolored page image inside the text column — exactly like image
-  pages do today — instead of risking mangled prose. Nothing ever looks
-  wrong; worst case looks like scroll mode.
-- **Spot-check affordance.** Tap-and-hold a paragraph → peek at the source
-  page region it came from. Trust is built by letting you verify cheaply.
-- **Structure coverage**: scene breaks (`***`, long gaps → `<hr>`-style
-  separators), block quotes / letters (indented blocks), simple lists. These
-  are the three structures prose books actually contain.
-- **Verification corpus.** A headless harness that reflows the test books
-  (DCC, Red Rising, Ender's Game, Sybex) and diffs extracted text order
-  against pdftotext ground truth — so reflow changes can't regress silently.
+- ✅ **Confidence, not bravado.** `reconstructPageScored` rates every page:
+  two-column starts, table-row gaps, ragged interior joins, dot-leader lines
+  (a TOC "reads right" to a text diff but looks like dot soup), dropped text.
+  Below 0.5, TextReader shows the recolored page image inside the column —
+  exactly like image pages — instead of risking mangled prose. Measured:
+  the novels keep every prose page as text (Ender's TOC falls back, as it
+  should); Sybex declines ~10% of pages (the tables) rather than mangle them.
+- ✅ **Scene breaks.** Glyph dinkuses ("* * *", "···") become centered
+  separators, deduped across page stitches. Gap-based detection was built,
+  measured on the corpus, and *removed*: big vertical gaps mark set-off
+  boxes (DCC's system messages), verse, and section spacing far more often
+  than scenes — a paragraph break is the honest rendering.
+- ✅ **Verification corpus.** `scripts/verify/reflow-corpus.ts` (npx tsx)
+  reflows DCC / Red Rising / Ender's Game / Sybex with the real engine and
+  scores word-bigram similarity against PyMuPDF ground truth per page;
+  `reflow-baseline.json` is the committed baseline and the run fails on
+  regression. Novels: median ≈0.99, zero low pages. No book text touches
+  the repo — scores only.
+- **Spot-check affordance** (open): tap-and-hold a paragraph → peek at the
+  source page region it came from. Trust is built by letting you verify
+  cheaply.
+- **Structure coverage** (open): block quotes / letters (indented blocks),
+  simple lists.
 
 ## 3. Scroll mode — polish the daily driver (P0)
 
@@ -154,6 +164,11 @@ blocked item — positions and highlights should follow you.
 - **Custom theme editor**: bg/fg pickers on the existing THEMES model.
 - **Tap-zone preferences**: left-tap-forward option (one-handed reading).
 - **Search**: diacritic-insensitive matching, recent searches.
+- ✅ **Dictionary lookup**: select a word (select mode) → Define. Offline
+  WordNet 3.1, sharded under `public/dict/en/` (~9.5MB, fetched per letter
+  on first use, cache-first in the SW — never precached), lemmatization for
+  irregulars and inflections (`engine/dict.ts`). Open: lookup from scroll
+  mode and Text Mode needs text selection there first.
 - **Highlights**: a second colour + margin dots in scroll mode.
 - **Library**: sort (recent / title / progress), storage usage per book.
 

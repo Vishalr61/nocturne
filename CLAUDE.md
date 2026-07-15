@@ -102,6 +102,8 @@ src/
 │   ├── classify.ts   classifyPage -> {kind, strategy, imageRects} (the spine)
 │   ├── crop.ts       detectContentBox: doc-level margin box for auto-crop
 │   ├── search.ts     streaming full-text search + match rects (text layer data)
+│   ├── reflow.ts     Text Mode reconstruction: blocks + per-page trust score
+│   ├── dict.ts       offline WordNet lookup (shards in public/dict/en/)
 │   └── pipeline.ts   renderDarkPage (+finishDarkPage for pre-rendered sources):
 │                     polarity, image masking, colour text — the per-page
 │                     decisions; shared by reader AND export
@@ -199,6 +201,9 @@ reading screenshots. The setup that works on this machine:
   (colour cover, greyscale photos, full-page bitmaps + text layer),
   `~/Documents/Hobby/Books/enders_game_-_full_novel.pdf` (pure prose — must
   never regress).
+- Reflow changes: run `npx tsx scripts/verify/reflow-corpus.ts` — it reflows
+  the corpus books with the real engine and fails on similarity regression
+  against the committed baseline (`--write-baseline` after intended changes).
 
 ## Guardrails for agents
 
