@@ -17,14 +17,22 @@ SHOTS.mkdir(exist_ok=True)
 
 
 def ensure_chrome(page):
-    if page.locator("button[aria-label='Reading settings']").count() == 0:
+    # Retry: the 4s auto-hide can fire between the check and the click.
+    for _ in range(3):
+        if page.locator("button[aria-label='Reading settings']").count() > 0:
+            return
         page.mouse.click(2, 500)
-        time.sleep(0.6)
+        time.sleep(0.5)
 
 
 def switch_mode(page, label):
-    ensure_chrome(page)
-    page.locator("button[aria-label='Reading settings']").click()
+    for _ in range(3):
+        ensure_chrome(page)
+        try:
+            page.locator("button[aria-label='Reading settings']").click(timeout=3000)
+            break
+        except Exception:
+            continue
     page.wait_for_selector("text=Reading settings", timeout=5000)
     page.locator("button:has-text('%s')" % label).last.click()
     time.sleep(0.5)

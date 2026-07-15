@@ -286,8 +286,30 @@ export function Shelf({ onOpen }: ShelfProps) {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-night-950 font-sans text-ink-body">
-      <header className="safe-top sticky top-0 z-20 border-b border-night-800 bg-night-950/80 backdrop-blur-xl">
+    <div
+      className="relative flex h-full flex-col overflow-y-auto font-sans text-ink-body"
+      style={{ background: 'linear-gradient(180deg, #231b12 0%, #1a140c 420px, #171208 100%)' }}
+    >
+      {/* The current book's own art, blurred, lights the room (design B).
+          Falls back to the warm gradient alone when there's no thumbnail. */}
+      {hero?.thumb && (
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[430px] overflow-hidden">
+          <img
+            src={hero.thumb}
+            alt=""
+            className="h-full w-full scale-125 object-cover"
+            style={{ filter: 'blur(56px) saturate(1.1)', opacity: 0.38 }}
+          />
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'linear-gradient(180deg, rgba(23,18,8,0.25) 0%, rgba(23,18,8,0.82) 66%, #1a140c 100%)',
+            }}
+          />
+        </div>
+      )}
+      <header className="safe-top sticky top-0 z-20 border-b border-white/[0.06] bg-[#1c1610]/70 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
           <div
             className="h-[30px] w-[30px] flex-none rounded-[9px]"
@@ -301,8 +323,13 @@ export function Shelf({ onOpen }: ShelfProps) {
           </h1>
           <span className="-ml-1 text-[13px] text-ink-soft">Library</span>
           <div className="flex-1" />
-          {storage && <span className="hidden text-xs text-ink-faint sm:block">{storage}</span>}
-          <label className="cursor-pointer rounded-[11px] bg-accent px-4 py-2 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi">
+          {stats && stats.todayMin > 0 && (
+            <span className="whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-xs text-ink-mid backdrop-blur-md">
+              {stats.todayMin} min today
+            </span>
+          )}
+          {storage && <span className="hidden text-xs text-ink-faint lg:block">{storage}</span>}
+          <label className="cursor-pointer rounded-full bg-accent px-4 py-2 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi">
             {busy ? 'Adding…' : 'Add PDF'}
             <input
               type="file"
@@ -315,7 +342,7 @@ export function Shelf({ onOpen }: ShelfProps) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
+      <main className="relative mx-auto w-full max-w-[1180px] flex-1 px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
         {books === null ? null : books.length === 0 && ghosts.length === 0 ? (
           <div className="anim-rise mt-24 text-center text-ink-dim">
             <p className="text-4xl">🌙</p>
@@ -333,24 +360,17 @@ export function Shelf({ onOpen }: ShelfProps) {
           <>
             {hero && (
               <section className="anim-rise">
-                <div className="mb-4 text-[11px] uppercase tracking-[0.18em] text-ink-kicker">
-                  Reading now
-                </div>
+                {/* Design B hero: the book stands centered in its own light. */}
                 <button
-                  className="flex w-full flex-wrap items-center rounded-[22px] border border-line text-left"
-                  style={{
-                    gap: 'clamp(22px,3vw,40px)',
-                    padding: 'clamp(20px,2.6vw,34px)',
-                    background: 'radial-gradient(130% 150% at 0% 0%,#241a0f,#160f08 70%)',
-                    boxShadow: '0 30px 60px -30px rgba(0,0,0,.8)',
-                  }}
+                  className="mx-auto flex w-full max-w-md flex-col items-center pt-2 text-center"
                   onClick={() => onOpen(hero.id)}
                 >
                   <div
-                    className="aspect-[3/4] flex-none overflow-hidden rounded-xl"
+                    className="aspect-[3/4] flex-none overflow-hidden rounded-2xl"
                     style={{
-                      width: 'clamp(110px,14vw,168px)',
-                      boxShadow: '0 22px 44px -16px rgba(0,0,0,.85)',
+                      width: 'clamp(140px,17vw,190px)',
+                      boxShadow:
+                        '0 34px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,0.07)',
                     }}
                   >
                     {hero.thumb ? (
@@ -366,33 +386,24 @@ export function Shelf({ onOpen }: ShelfProps) {
                       </div>
                     )}
                   </div>
-                  <div className="min-w-[min(260px,100%)] flex-1">
-                    <div
-                      className="font-serif leading-[1.08] tracking-tight text-ink-head"
-                      style={{ fontSize: 'clamp(26px,3.4vw,40px)' }}
-                    >
-                      {hero.title}
-                    </div>
-                    <div className="mt-2 text-[15px] text-ink-mid">
-                      {hero.pageCount} pages · added {relTime(hero.addedAt)}
-                    </div>
-                    <div className="mt-6 flex max-w-[440px] items-center gap-4">
-                      <div className="h-1 flex-1 overflow-hidden rounded bg-line">
-                        <div
-                          className="h-full bg-gradient-to-r from-accent to-accent-hi"
-                          style={{ width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%` }}
-                        />
-                      </div>
-                      <span className="whitespace-nowrap text-[13px] tabular-nums text-ink-mid">
-                        {meta(hero)}
-                      </span>
-                    </div>
-                    <div className="mt-6">
-                      <span className="inline-block rounded-xl bg-accent px-6 py-2.5 text-sm font-semibold text-accent-on">
-                        Resume reading
-                      </span>
+                  <div
+                    className="mt-5 font-serif leading-[1.15] tracking-tight text-ink-head"
+                    style={{ fontSize: 'clamp(22px,2.6vw,30px)' }}
+                  >
+                    {hero.title}
+                  </div>
+                  <div className="mt-1.5 text-[13px] text-ink-mid">{meta(hero)}</div>
+                  <div className="mt-2 flex w-full max-w-[280px] items-center">
+                    <div className="h-[3px] flex-1 overflow-hidden rounded bg-white/10">
+                      <div
+                        className="h-full bg-gradient-to-r from-accent to-accent-hi"
+                        style={{ width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%` }}
+                      />
                     </div>
                   </div>
+                  <span className="mt-5 inline-block rounded-full bg-accent px-8 py-2.5 text-sm font-semibold text-accent-on shadow-lg">
+                    Resume reading
+                  </span>
                 </button>
               </section>
             )}
