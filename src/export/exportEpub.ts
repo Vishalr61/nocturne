@@ -137,7 +137,9 @@ async function loadFontFaces(fontId: string): Promise<EmbeddedFace[]> {
   return faces
 }
 
-const FIG_CSS = '.fig { margin: 1em 0; text-align: center; } .fig img { max-width: 100%; }'
+const FIG_CSS =
+  '.fig { margin: 1em 0; text-align: center; } .fig img { max-width: 100%; }\n' +
+  '.scene { margin: 1.6em 0; text-align: center; letter-spacing: 0.6em; opacity: 0.6; }'
 
 function styleCss(style: EpubTypography | undefined, faces: EmbeddedFace[]): string {
   if (!style) {
@@ -156,7 +158,7 @@ ${FIG_CSS}`
   const para =
     style.para === 'spaced'
       ? 'p { margin: 0 0 0.9em; text-indent: 0; }'
-      : 'p { margin: 0; text-indent: 1.3em; }\nh2 + p { text-indent: 0; }'
+      : 'p { margin: 0; text-indent: 1.3em; }\nh2 + p, .scene + p { text-indent: 0; }'
   const justify = style.justify
     ? '\np { text-align: justify; -webkit-hyphens: auto; hyphens: auto; }'
     : ''
@@ -301,7 +303,7 @@ function chapterizeByOutline(
     cur.blocks.push(b)
   }
   return chapters.filter((c) =>
-    c.blocks.some((b) => b.kind === 'img' || spansText(b.spans).trim()),
+    c.blocks.some((b) => b.kind === 'img' || (b.kind !== 'sep' && spansText(b.spans).trim())),
   )
 }
 
@@ -333,7 +335,7 @@ function chapterize(blocks: Block[], imgs: Map<Block, EpubImage>): Chapter[] {
     }
   }
   return chapters.filter((c) =>
-    c.blocks.some((b) => b.kind === 'img' || spansText(b.spans).trim()),
+    c.blocks.some((b) => b.kind === 'img' || (b.kind !== 'sep' && spansText(b.spans).trim())),
   )
 }
 
@@ -351,6 +353,7 @@ function chapterXhtml(c: Chapter, imgs: Map<Block, EpubImage>): string {
           const pct = Math.max(25, Math.min(100, Math.round(im.wf * 100)))
           return `<div class="fig"><img src="images/${im.file}" style="width:${pct}%" alt=""/></div>`
         }
+        if (b.kind === 'sep') return '<div class="scene">* * *</div>'
         return b.kind === 'h' ? `<h2>${spanHtml(b.spans)}</h2>` : `<p>${spanHtml(b.spans)}</p>`
       }),
     )
@@ -448,7 +451,7 @@ export async function exportEpub(
     : []
   const chapters = byOutline.length ? byOutline : chapterize(all, imgMap)
   const totalChars = all.reduce(
-    (n, b) => n + (b.kind === 'img' ? 0 : spansText(b.spans).length),
+    (n, b) => n + (b.kind === 'img' || b.kind === 'sep' ? 0 : spansText(b.spans).length),
     0,
   )
   if (totalChars < 500) {

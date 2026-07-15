@@ -1,0 +1,30 @@
+{
+  "dcc": {
+    "pages": 375,
+    "medianSim": 0.9932,
+    "p10Sim": 0.9821,
+    "lowPages": 0,
+    "fallbackPages": 0
+  },
+  "red-rising": {
+    "pages": 366,
+    "medianSim": 0.9946,
+    "p10Sim": 0.9829,
+    "lowPages": 0,
+    "fallbackPages": 2
+  },
+  "enders-game": {
+    "pages": 180,
+    "medianSim": 0.9955,
+    "p10Sim": 0.9853,
+    "lowPages": 0,
+    "fallbackPages": 1
+  },
+  "sybex": {
+    "pages": 344,
+    "medianSim": 0.9756,
+    "p10Sim": 0.9449,
+    "lowPages": 0,
+    "fallbackPages": 36
+  }
+}

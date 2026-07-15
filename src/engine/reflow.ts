@@ -35,7 +35,22 @@ export interface ImageBlock {
   rect: Rect
 }
 
-export type Block = TextBlock | ImageBlock
+/** A scene break: a line of pure break glyphs ("* * *", "···", "⁂"). Blank-gap
+ *  breaks are deliberately NOT detected — measured on the corpus, big gaps mark
+ *  set-off boxes, verse, and section spacing far more often than scenes. */
+export interface SepBlock {
+  kind: 'sep'
+}
+
+export type Block = TextBlock | ImageBlock | SepBlock
+
+/** How much to trust one page's reconstruction. The score is heuristic (1 =
+ *  clean single-column prose, 0 = don't show this as text); `flags` name the
+ *  detectors that fired so the verification harness can explain a low score. */
+export interface ReflowQuality {
+  confidence: number
+  flags: string[]
+}
 
 interface Line {
   segs: Span[]
@@ -44,6 +59,9 @@ interface Line {
   x1: number
   y: number
   size: number
+  /** Widest horizontal gap between runs inside the line, in font-size units.
+   *  Prose is ~0; table rows and TOC leaders have big ones. */
+  maxGap: number
 }
 
 function runX(r: Run): number {
@@ -82,8 +100,10 @@ function toLines(runs: Run[]): Line[] {
     const segs: Span[] = []
     let text = ''
     let prevRight = -Infinity
+    let maxGap = 0
     for (const r of ordered) {
       const gap = runX(r) - prevRight
+      if (prevRight > -Infinity) maxGap = Math.max(maxGap, gap / runSize(r))
       // Insert a space when there's a visible gap and neither side has one. The
       // threshold is a fraction of the font size (~a space width): too high drops
       // spaces between words ("notmine"), too low splits words.
@@ -108,6 +128,7 @@ function toLines(runs: Run[]): Line[] {
       x1: Math.max(...ordered.map((r) => runX(r) + r.width)),
       y: curY,
       size: Math.max(...ordered.map(runSize)),
+      maxGap,
     })
     cur = []
   }
@@ -140,6 +161,9 @@ const CHAPTER_MARKER = /^[[(]?\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]?$
 const BRACKET_MARKER = /^[[(]\s*(chapter\s+|part\s+)?[\divxlcdm]{1,5}\s*[\])]$/i
 /** Distributor watermarks ("OceanofPDF.com") masquerade as display type. */
 const URLISH = /(?:https?:\/\/|www\.|\.(?:com|net|org|io|co)\b)/i
+// A scene-break line: only break glyphs (asterisks, dots, dashes, fleurons),
+// short, no letters or digits — "* * *", "· · ·", "⁂", "~".
+const SCENE_BREAK = /^[*·•⁂✳~#_—–-\s]{1,16}$/
 
 /**
  * Reconstruct readable blocks from one page's extracted text. `imageRects`
@@ -149,13 +173,28 @@ const URLISH = /(?:https?:\/\/|www\.|\.(?:com|net|org|io|co)\b)/i
  * / full-page backgrounds) — this only orders and slots them.
  */
 export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] {
-  const lines = toLines(pt.runs)
-  if (!lines.length) {
-    // No text to reflow, but there may still be images to show (a bare divider).
-    return imageRects
+  return reconstructPageScored(pt, imageRects).blocks
+}
+
+/**
+ * reconstructPage plus a trust score. Reflow heuristics fail silently — a
+ * two-column page interleaves, a table reads as word soup — and one mangled
+ * paragraph costs all trust in Text Mode. The score lets the reader fall back
+ * to the recolored page image instead of showing prose it can't stand behind.
+ */
+export function reconstructPageScored(
+  pt: PageText,
+  imageRects: Rect[] = [],
+): { blocks: Block[]; quality: ReflowQuality } {
+  const asImages = (): Block[] =>
+    imageRects
       .slice()
       .sort((a, b) => b.y + b.h - (a.y + a.h))
       .map((rect) => ({ kind: 'img', rect }) as ImageBlock)
+  const lines = toLines(pt.runs)
+  if (!lines.length) {
+    // No text to reflow, but there may still be images to show (a bare divider).
+    return { blocks: asImages(), quality: { confidence: 1, flags: [] } }
   }
 
   const bodySize = median(lines.flatMap((l) => Array(Math.max(1, l.text.length)).fill(l.size)))
@@ -190,10 +229,7 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
     return !(short || pageNumberish)
   })
   if (!body.length) {
-    return imageRects
-      .slice()
-      .sort((a, b) => b.y + b.h - (a.y + a.h))
-      .map((rect) => ({ kind: 'img', rect }) as ImageBlock)
+    return { blocks: asImages(), quality: { confidence: 1, flags: [] } }
   }
 
   // The book's normal line spacing, so paragraph breaks can be judged relative
@@ -209,8 +245,24 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
 
   const blocks: Block[] = []
   let para: Line[] = []
+  // Trust tallies. Interior lines (every merged line except a paragraph's last)
+  // should run the full measure in real prose; short ones mean the joins are
+  // inventing paragraphs out of verse, lists, or dialogue transcripts.
+  let interiorJoins = 0
+  let shortInteriorJoins = 0
+  // Lines that landed in paragraphs: how many start deep into the measure
+  // (column two of a two-column page) or contain a wide interior gap (a table
+  // row read left-to-right across its cells).
+  let paraLines = 0
+  let rightStarts = 0
+  let gappyLines = 0
+  let leaderLines = 0
   const pushPara = () => {
     if (!para.length) return
+    for (let i = 0; i < para.length - 1; i++) {
+      interiorJoins++
+      if (para[i].x1 - para[i].x0 < textWidth * 0.55) shortInteriorJoins++
+    }
     const spans: Span[] = []
     let plain = ''
     for (let i = 0; i < para.length; i++) {
@@ -254,9 +306,18 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
     }
   }
 
+  const pushSep = () => {
+    pushPara()
+    if (blocks[blocks.length - 1]?.kind !== 'sep') blocks.push({ kind: 'sep' })
+  }
   for (let i = 0; i < body.length; i++) {
     const line = body[i]
     emitImagesAbove(line.y)
+    // A line of pure break glyphs ("* * *", "···") is a scene break, not prose.
+    if (line.x1 - line.x0 < textWidth * 0.4 && SCENE_BREAK.test(line.text)) {
+      pushSep()
+      continue
+    }
     const heading =
       (line.size > bodySize * 1.25 && !URLISH.test(line.text)) ||
       (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
@@ -276,6 +337,10 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
       const indented = line.x0 - leftMargin > bodySize * 0.5
       if (bigGap || indented) pushPara()
     }
+    paraLines++
+    if (line.x0 > leftMargin + textWidth * 0.4) rightStarts++
+    if (line.maxGap > 3) gappyLines++
+    if (/([.…]\s?){6,}/.test(line.text)) leaderLines++
     para.push(line)
   }
   pushPara()
@@ -284,13 +349,59 @@ export function reconstructPage(pt: PageText, imageRects: Rect[] = []): Block[] 
     blocks.push({ kind: 'img', rect: imgs[imgAt].rect })
     imgAt++
   }
-  return blocks
+
+  // Score the reconstruction. Each detector targets a specific way reflow
+  // produces confident-looking garbage; penalties scale with how much of the
+  // page misbehaves, and small samples don't judge (a 3-line page proves
+  // nothing). Thresholds tuned against the corpus in scripts/verify.
+  const flags: string[] = []
+  let confidence = 1
+  const rightFrac = paraLines ? rightStarts / paraLines : 0
+  if (paraLines >= 8 && rightFrac > 0.25) {
+    flags.push('columns')
+    confidence -= 0.4 + rightFrac * 0.4
+  }
+  const gappyFrac = paraLines ? gappyLines / paraLines : 0
+  if (paraLines >= 6 && gappyFrac > 0.15) {
+    flags.push('table')
+    confidence -= 0.3 + gappyFrac * 0.5
+  }
+  // Dot-leader lines (a TOC, an index) reflow into dot soup. The words come
+  // out in the right order — a text diff can't see this one — but the page
+  // reads far better as its image.
+  const leaderFrac = paraLines ? leaderLines / paraLines : 0
+  if (paraLines >= 4 && leaderFrac > 0.25) {
+    flags.push('leaders')
+    confidence -= 0.4 + leaderFrac * 0.3
+  }
+  const raggedFrac = interiorJoins ? shortInteriorJoins / interiorJoins : 0
+  if (interiorJoins >= 5 && raggedFrac > 0.3) {
+    flags.push('ragged-joins')
+    confidence -= 0.2 + raggedFrac * 0.4
+  }
+  const allChars = lines.reduce((n, l) => n + l.text.length, 0)
+  const bodyChars = body.reduce((n, l) => n + l.text.length, 0)
+  const coverage = allChars ? bodyChars / allChars : 1
+  if (allChars > 200 && coverage < 0.5) {
+    flags.push('dropped-text')
+    confidence -= 0.5 - coverage
+  }
+  return {
+    blocks,
+    quality: { confidence: Math.max(0, Math.min(1, confidence)), flags },
+  }
 }
 
 /** Join a paragraph split across a page boundary (last of A into first of B). */
 export function stitch(a: Block[], b: Block[]): void {
   const tail = a[a.length - 1]
   const head = b[0]
+  // A scene break at a page bottom meeting one at the next page's top is the
+  // same break twice; keep one.
+  if (tail?.kind === 'sep' && head?.kind === 'sep') {
+    b.shift()
+    return
+  }
   if (tail?.kind !== 'p' || !tail.openEnd || head?.kind !== 'p' || !head.openStart) return
   if (/[A-Za-z]-$/.test(spansText(tail.spans)) && /^[a-z]/.test(spansText(head.spans))) {
     const last = tail.spans[tail.spans.length - 1]
