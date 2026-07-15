@@ -27,6 +27,7 @@ import {
   type TextCache,
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
+import { lookupWord, type DictResult } from '../engine/dict'
 import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
 import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
@@ -66,6 +67,10 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
+
+/** Define only offers itself for a single word — not a passage. */
+const isDefinable = (text: string) => /^[\p{L}\p{N}'’-]{1,32}$/u.test(text.trim())
+const POS_LABEL = { n: 'noun', v: 'verb', a: 'adj.', r: 'adv.' } as const
 
 /** A recolored page rendered to a 2D canvas, with its on-screen display size. */
 interface PageBitmap {
@@ -249,6 +254,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** Select mode: while on, the text layer takes taps so you can select/copy. */
   const [selectMode, setSelectMode] = useState(false)
   const [selection, setSelection] = useState<TextSelection | null>(null)
+  /** Dictionary lookup for a selected word: idle → loading → result/none. */
+  const [definition, setDefinition] = useState<'idle' | 'loading' | 'none' | DictResult>('idle')
   /**
    * The page and the geometry it was drawn with, published together. These must
    * never be separate pieces of state: a render where the page number had moved
@@ -1217,6 +1224,23 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     window.getSelection()?.removeAllRanges()
   }, [selection, view])
 
+  // A new selection invalidates any definition in flight or on screen; the
+  // counter keeps a slow shard fetch from resolving onto a different word.
+  const defineSeq = useRef(0)
+  useEffect(() => {
+    defineSeq.current++
+    setDefinition('idle')
+  }, [selection])
+
+  const defineSelection = useCallback(async () => {
+    const word = selection?.text.trim()
+    if (!word) return
+    const seq = ++defineSeq.current
+    setDefinition('loading')
+    const res = await lookupWord(word)
+    if (defineSeq.current === seq) setDefinition(res ?? 'none')
+  }, [selection])
+
   const dropHighlight = useCallback(async (hid: string) => {
     const id = loadedIdRef.current
     if (!id) return
@@ -1695,30 +1719,66 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         )}
       </div>
 
-      {/* Selection popover: the only way a highlight gets made. */}
+      {/* Selection popover: highlight, copy, and (for a single word) define. */}
       {selectMode && selection && (
         <div
           className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
-          style={{ left: selection.x, top: Math.max(48, selection.y - 10) }}
+          style={{
+            left:
+              definition === 'idle'
+                ? selection.x
+                : Math.min(Math.max(selection.x, 156), window.innerWidth - 156),
+            top: Math.max(48, selection.y - 10),
+          }}
         >
-          <div className="flex overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
-            <button
-              className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
-              onClick={() => void saveHighlight()}
-            >
-              ★ Highlight
-            </button>
-            <button
-              className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
-              onClick={() => {
-                void navigator.clipboard?.writeText(selection.text)
-                setSelection(null)
-                window.getSelection()?.removeAllRanges()
-              }}
-            >
-              Copy
-            </button>
-          </div>
+          {definition === 'idle' ? (
+            <div className="flex overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+              <button
+                className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
+                onClick={() => void saveHighlight()}
+              >
+                ★ Highlight
+              </button>
+              <button
+                className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(selection.text)
+                  setSelection(null)
+                  window.getSelection()?.removeAllRanges()
+                }}
+              >
+                Copy
+              </button>
+              {isDefinable(selection.text) && (
+                <button
+                  className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
+                  onClick={() => void defineSelection()}
+                >
+                  Define
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="w-72 max-w-[82vw] rounded-xl border border-line bg-panel p-4 text-left shadow-2xl">
+              {definition === 'loading' ? (
+                <p className="text-[13px] text-ink-mid">Looking up…</p>
+              ) : definition === 'none' ? (
+                <p className="text-[13px] text-ink-mid">No definition found.</p>
+              ) : (
+                <>
+                  <p className="font-serif text-[15px] font-semibold">{definition.word}</p>
+                  <ol className="mt-2 space-y-1.5">
+                    {definition.senses.slice(0, 4).map((s, i) => (
+                      <li key={i} className="text-[13px] leading-snug text-ink-mid">
+                        <span className="mr-1.5 italic opacity-60">{POS_LABEL[s.pos]}</span>
+                        {s.def}
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 

@@ -10,3 +10,4 @@ dist-ssr
 .vite
 dev-dist
 design-notes.jsonl
+scripts/verify/shots/
