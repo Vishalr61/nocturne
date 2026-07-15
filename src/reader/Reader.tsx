@@ -70,6 +70,44 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
+/** A collapsible settings group: the drawer shows headlines, not everything.
+ *  Local state (not <details open>) so slider-driven re-renders can't snap a
+ *  section back to its default. */
+function DrawerSection({
+  title,
+  hint,
+  defaultOpen = false,
+  children,
+}: {
+  title: string
+  hint?: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="mb-3 rounded-2xl bg-night-800/40">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between px-4 py-3.5 text-left"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="text-[13px] font-semibold text-ink-body">
+          {title}
+          {hint && <span className="ml-2 font-normal text-ink-faint">{hint}</span>}
+        </span>
+        <span
+          className={`text-ink-faint transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+        >
+          ›
+        </span>
+      </button>
+      {open && <div className="px-3 pb-3">{children}</div>}
+    </div>
+  )
+}
+
 const POS_LABEL = {
   n: 'noun',
   v: 'verb',
@@ -1775,7 +1813,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       {/* Floating chrome (design B): glass pills over the page, so showing or
           hiding them never reflows the reading surface. */}
       {chrome && (
-        <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-[24] flex items-center justify-between gap-3 px-3 pt-3 text-sm">
+        <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-[24] mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-3 pt-3 text-sm">
           <button
             className="pointer-events-auto whitespace-nowrap rounded-full px-4 py-2 opacity-90 transition-opacity hover:opacity-100"
             style={pill}
@@ -2217,34 +2255,33 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </button>
             </div>
 
-            <div className="mb-3.5 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-              Theme
+            <div className="mb-3.5 flex items-baseline justify-between">
+              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Theme</span>
+              <span className="text-[11px] text-ink-faint">
+                {THEMES.find((t) => t.id === themeId)?.name}
+              </span>
             </div>
-            <div className="mb-8 grid grid-cols-2 gap-2.5">
+            <div className="mb-3 grid grid-cols-4 gap-2">
               {THEMES.map((t) => (
                 <button
                   key={t.id}
-                  className={`flex h-12 items-center gap-2.5 rounded-xl border-2 px-3.5 text-left transition-transform active:scale-[0.97] ${
+                  aria-label={`${t.name} theme`}
+                  title={t.name}
+                  className={`grid h-11 place-items-center rounded-xl border-2 transition-transform active:scale-[0.95] ${
                     t.id === themeId ? 'border-accent' : 'border-night-700'
                   }`}
                   style={{ background: rgbCss(t.bg) }}
                   onClick={() => setThemeId(t.id)}
                 >
-                  <span className="font-serif text-lg leading-none" style={{ color: rgbCss(t.fg) }}>
+                  <span className="font-serif text-[15px] leading-none" style={{ color: rgbCss(t.fg) }}>
                     Aa
-                  </span>
-                  <span
-                    className="truncate text-[11px]"
-                    style={{ color: rgbCss(t.fg), opacity: 0.75 }}
-                  >
-                    {t.name}
                   </span>
                 </button>
               ))}
             </div>
-            <div className="mb-5 flex items-center justify-between rounded-xl bg-inset px-4 py-3">
+            <div className="mb-6 flex items-center justify-between rounded-xl bg-inset px-4 py-2.5">
               <span className="text-[13px] text-ink-body">
-                Auto by time <span className="text-ink-faint">(Paper by day, dark at night)</span>
+                Auto by time <span className="text-ink-faint">(Paper by day)</span>
               </span>
               <IosToggle checked={autoTheme} onChange={setAutoTheme} label="Auto theme by time" />
             </div>
@@ -2273,18 +2310,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   : 'Reflowed into your font and spacing — for prose. Flip to Paged for figure or scanned pages.'}
             </p>
 
-            {viewMode === 'paged' && (
-              <div className="mb-7 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
-                <span className="text-[13px] text-ink-body">
-                  Two-page spread <span className="text-ink-faint">(landscape)</span>
-                </span>
-                <IosToggle checked={spread} onChange={setSpread} label="Two-page spread" />
-              </div>
-            )}
-
             {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
             {viewMode === 'text' && (
-              <>
+              <DrawerSection title="Type" hint="font · size · spacing" defaultOpen>
                 <div className="mb-4 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
                   Font
                 </div>
@@ -2392,7 +2420,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     Spaced
                   </button>
                 </div>
-                <div className="mb-8 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+                <div className="flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
                   <span className="text-[13px] text-ink-body">
                     Justify <span className="text-ink-faint">(+ hyphenate)</span>
                   </span>
@@ -2402,13 +2430,22 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     label="Justify text"
                   />
                 </div>
-              </>
+              </DrawerSection>
             )}
 
             {/* Page image: zoom (paged/scroll, not spread), brightness, crop —
                 grouped as one card; none of it applies to reflow. */}
             {viewMode !== 'text' && (
-              <div className="mb-7 divide-y divide-line/60 rounded-2xl bg-night-800/50">
+              <DrawerSection title="Page" hint="zoom · images · crop" defaultOpen>
+                {viewMode === 'paged' && (
+                  <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+                    <span className="text-[13px] text-ink-body">
+                      Two-page spread <span className="text-ink-faint">(landscape)</span>
+                    </span>
+                    <IosToggle checked={spread} onChange={setSpread} label="Two-page spread" />
+                  </div>
+                )}
+                <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
                 {!spreadActive && (
                   <div className="px-4 py-3">
                     <div className="mb-1.5 flex items-center justify-between">
@@ -2466,12 +2503,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     />
                   </div>
                 )}
-              </div>
+                </div>
+              </DrawerSection>
             )}
 
-            {/* Screen: device/environment comfort, not per-book. */}
-            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Screen</div>
-            <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
+            {/* Comfort: device/environment preferences, not per-book. */}
+            <DrawerSection title="Comfort" hint="dimmer · taps · dictionary">
+              <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
               <div className="px-4 py-3">
                 <div className="mb-1.5 flex items-center justify-between">
                   <span className="text-[13px] text-ink-body">Night dimmer</span>
@@ -2523,13 +2561,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
                 </div>
               )}
-            </div>
-            <p className="mb-5 mt-2 px-1 text-xs leading-relaxed text-ink-faint">
-              Dims below the phone's minimum brightness for reading in the dark.
-            </p>
+              </div>
+              <p className="mt-2 px-1 text-xs leading-relaxed text-ink-faint">
+                The dimmer goes below the phone's minimum brightness for dark rooms.
+              </p>
+            </DrawerSection>
 
             {'speechSynthesis' in window && (
-              <div className="mb-7 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
+              <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/40 px-4 py-3">
                 <span className="text-[13px] text-ink-body">
                   Read aloud <span className="text-ink-faint">(follows along)</span>
                 </span>
@@ -2546,13 +2585,37 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
+            {/* A finished export must never hide inside a folded section — the
+                Share row lives outside the Export group. */}
+            {pendingSave && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-night-800/50 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] text-ink-body">{pendingSave.name}</div>
+                  <div className="text-[11px] text-ink-faint">Ready — send it to Files or Books</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi"
+                    onClick={() => void sharePending()}
+                  >
+                    Share…
+                  </button>
+                  <button
+                    aria-label="Discard export"
+                    className="flex h-7 w-7 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                    onClick={() => setPendingSave(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* One export model: choose the scope (whole book or a page
                 range), then a format. Every format follows the current reading
                 setup — theme, image brightness, crop, Text Mode type — so what
                 you save is what you saw. */}
-            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-              Export
-            </div>
+            <DrawerSection title="Export" hint="PDF · EPUB · pages">
             <div className="flex rounded-xl bg-inset p-1">
               {([false, true] as const).map((r) => (
                 <button
@@ -2588,31 +2651,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
                 />
                 <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
-              </div>
-            )}
-            {/* A long export outlives its tap's user activation, so the share
-                sheet can't open by itself — the finished file waits here. */}
-            {pendingSave && (
-              <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-night-800/50 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] text-ink-body">{pendingSave.name}</div>
-                  <div className="text-[11px] text-ink-faint">Ready — send it to Files or Books</div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi"
-                    onClick={() => void sharePending()}
-                  >
-                    Share…
-                  </button>
-                  <button
-                    aria-label="Discard export"
-                    className="flex h-7 w-7 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
-                    onClick={() => setPendingSave(null)}
-                  >
-                    ✕
-                  </button>
-                </div>
               </div>
             )}
             <div className="mt-3 divide-y divide-line/60 rounded-2xl bg-night-800/50">
@@ -2690,6 +2728,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               </div>
             </div>
+            </DrawerSection>
 
             {cls && (
               <div className="mt-6 text-center text-[11px] text-ink-faint">page: {cls.kind}</div>
