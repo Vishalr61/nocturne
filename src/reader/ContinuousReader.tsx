@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { type CropBox, type PDFDocumentProxy } from '../engine/pdf'
+import { type CropBox, type PDFDocumentProxy, type PDFPageProxy } from '../engine/pdf'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
 import type { Theme } from '../engine/theme'
 import type { Highlight } from '../storage/db'
+import { TextLayer, type TextSelection } from './TextLayer'
 
 // Continuous (scroll) reading. A virtualized vertical strip: every page is a
 // fixed-height slot, but only the pages near the viewport hold a rendered
@@ -15,9 +16,12 @@ import type { Highlight } from '../storage/db'
 // one GL context renders each page in turn and its pixels are blitted into that
 // page's own 2D canvas.
 //
-// Deliberately simpler than paged mode: fit-width, no pinch-zoom, and text
-// selection/highlight *creation* stays in paged mode (a drag here means scroll,
-// not select). Saved highlights are still shown, and jumps still land.
+// Deliberately simpler than paged mode: fit-width, pinch commits on release.
+// Unlike paged mode there are no page-turn tap zones to protect, so the text
+// layer is ALWAYS active here — no select mode: a long-press (or mouse drag)
+// selects text directly, and the selection popover (define/copy/highlight)
+// appears. Touch-drag still scrolls; only a deliberate selection gesture
+// selects.
 
 const RENDER_BUFFER = 2 // pages rendered above/below the viewport
 const PAGE_GAP = 12 // px between pages in the strip
@@ -46,6 +50,9 @@ interface ContinuousReaderProps {
   onToggleChrome: () => void
   textCache: TextCache
   highlights: Highlight[]
+  /** A selection made on a page's text layer (null when that page's selection
+   *  cleared) — the parent shows the popover and records highlights. */
+  onSelect?: (page: number, sel: TextSelection | null) => void
   /** Bumped by the parent when doc/theme/crop/imageDim change, to force re-render. */
   renderKey: string
 }
@@ -71,6 +78,7 @@ export function ContinuousReader({
   onToggleChrome,
   textCache,
   highlights,
+  onSelect,
   renderKey,
 }: ContinuousReaderProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
@@ -398,7 +406,12 @@ export function ContinuousReader({
       className="relative flex-1 overflow-auto"
       // pan-x too so a zoomed (wider-than-screen) page can be panned sideways.
       style={{ touchAction: 'pan-x pan-y' }}
-      onClick={onToggleChrome}
+      onClick={() => {
+        // The click that ends a text selection must not toggle the chrome.
+        const s = window.getSelection()
+        if (s && !s.isCollapsed) return
+        onToggleChrome()
+      }}
     >
       {/* One tall spacer establishes the full scroll height; pages are absolutely
           positioned into it so only the visible few exist in the DOM. Its width
@@ -425,6 +438,7 @@ export function ContinuousReader({
             crop={crop}
             textCache={textCache}
             contentWidth={contentWidth}
+            onSelect={onSelect}
           />
         ))}
       </div>
@@ -443,6 +457,7 @@ interface PageSlotProps {
   crop: CropBox | null
   textCache: TextCache
   contentWidth: number
+  onSelect?: (page: number, sel: TextSelection | null) => void
 }
 
 function PageSlot({
@@ -456,9 +471,34 @@ function PageSlot({
   crop,
   textCache,
   contentWidth,
+  onSelect,
 }: PageSlotProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [rects, setRects] = useState<{ id: string; left: number; top: number; w: number; h: number }[]>([])
+  // The page proxy + scale for the text layer — the SAME pair the canvas was
+  // rendered with (contentWidth / effective width), per the overlay invariant.
+  const [layer, setLayer] = useState<{ pdfPage: PDFPageProxy; cssScale: number } | null>(null)
+
+  useEffect(() => {
+    if (!canvas || !contentWidth) {
+      setLayer(null)
+      return
+    }
+    let alive = true
+    void (async () => {
+      try {
+        const pdfPage = await doc.getPage(n)
+        if (!alive) return
+        const vp = pdfPage.getViewport({ scale: 1 })
+        setLayer({ pdfPage, cssScale: contentWidth / (vp.width * (crop?.fw ?? 1)) })
+      } catch {
+        if (alive) setLayer(null)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [canvas, n, doc, crop, contentWidth])
 
   // Mount the recolored canvas (owned by the parent's map) into a dedicated
   // leaf node. That node has NO React children, so imperatively swapping the
@@ -531,6 +571,17 @@ function PageSlot({
               style={{ left: r.left, top: r.top, width: r.w, height: r.h }}
             />
           ))}
+        {canvas && layer && onSelect && (
+          <TextLayer
+            page={layer.pdfPage}
+            pageNo={n}
+            cssScale={layer.cssScale}
+            crop={crop}
+            cache={textCache}
+            active
+            onSelect={(sel) => onSelect(n, sel)}
+          />
+        )}
       </div>
     </div>
   )
