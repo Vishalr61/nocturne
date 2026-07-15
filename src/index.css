@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Installed (standalone) PWA: content draws under the iOS status bar and home
+   indicator (viewport-fit=cover). Every fixed chrome surface pads itself clear
+   of them — without this the whole top navbar sits under the clock, unclickable. */
+@layer utilities {
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
 /* The single source of truth for the accent. Tailwind's `accent-*` colours and
    every inline style read these, so a theme tweak lands everywhere at once.
    Space-separated channels so Tailwind's /opacity modifiers work. */

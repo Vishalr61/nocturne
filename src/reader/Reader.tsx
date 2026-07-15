@@ -1755,7 +1755,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       )}
       {chrome && (
         <header
-          className="z-20 flex items-center gap-3 px-4 py-3 text-sm"
+          className="safe-top z-20 flex items-center gap-3 px-4 py-3 text-sm"
           style={{ borderBottom: `1px solid ${hairline}` }}
         >
           <button
@@ -2078,7 +2078,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
       {chrome && (
         <footer
-          className="z-20 flex items-center gap-3 px-4 py-2.5"
+          className="safe-bottom z-20 flex items-center gap-3 px-4 py-2.5"
           style={{ borderTop: `1px solid ${hairline}` }}
         >
           <input
@@ -2176,7 +2176,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="anim-fade fixed inset-0 z-30 bg-black/45"
             onClick={() => setShowSettings(false)}
           />
-          <div className="anim-panel fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line/70 bg-panel/90 p-5 pb-10 font-sans text-ink-body shadow-[-12px_0_48px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
+          <div className="anim-panel safe-top safe-bottom fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line/70 bg-panel/90 p-5 pb-10 font-sans text-ink-body shadow-[-12px_0_48px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
             <div className="mb-6 flex items-center justify-between">
               <div className="font-serif text-xl text-ink-bright">Reading settings</div>
               <button
@@ -2670,7 +2670,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       )}
 
       {showSearch && (
-        <div className="anim-fade absolute inset-0 z-30 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
+        <div className="anim-fade safe-top absolute inset-0 z-30 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
           <div className="mx-auto flex w-full max-w-xl items-center gap-3 px-5 py-4">
             <input
               aria-label="Search in book"
@@ -2736,7 +2736,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       )}
 
       {showToc && (
-        <div className="anim-fade absolute inset-0 z-20 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
+        <div className="anim-fade safe-top absolute inset-0 z-20 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
           <div className="flex items-center justify-between px-5 py-4">
             <span className="font-serif text-lg text-ink-bright">Contents</span>
             <div className="flex items-center gap-2">

@@ -287,7 +287,7 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-night-950 font-sans text-ink-body">
-      <header className="sticky top-0 z-20 border-b border-night-800 bg-night-950/80 backdrop-blur-xl">
+      <header className="safe-top sticky top-0 z-20 border-b border-night-800 bg-night-950/80 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
           <div
             className="h-[30px] w-[30px] flex-none rounded-[9px]"
@@ -323,6 +323,10 @@ export function Shelf({ onOpen }: ShelfProps) {
             <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed">
               Add a PDF — on iPhone the picker opens Files, so your iCloud Drive books are right
               there.
+            </p>
+            <p className="mx-auto mt-3 max-w-xs text-xs leading-relaxed text-ink-faint">
+              Moving in from the browser version? Restore your backup file below, then re-add the
+              same PDFs — your positions and highlights re-attach automatically.
             </p>
           </div>
         ) : (
@@ -612,7 +616,7 @@ export function Shelf({ onOpen }: ShelfProps) {
           {showInstallHelp && (
             <p className="anim-fade mt-2 rounded-xl bg-inset px-4 py-3 text-xs leading-relaxed text-ink-mid">
               {isIOS()
-                ? 'In Safari: tap the Share button, then “Add to Home Screen”. Nocturne appears as an app icon and opens full-screen.'
+                ? 'In Safari: tap the Share button, then “Add to Home Screen”. Nocturne appears as an app icon and opens full-screen. Heads-up: the installed app keeps its own separate library — tap Backup here first, then Restore inside the installed app, and re-add the PDFs from Files (positions and highlights re-attach automatically).'
                 : 'In your browser menu, look for “Install Nocturne” or “Add to Home Screen”.'}
             </p>
           )}
@@ -621,7 +625,7 @@ export function Shelf({ onOpen }: ShelfProps) {
 
       {/* Durability: say plainly whether these books are safe here, and give
           the two escape hatches (backup file, restore) that make them so. */}
-      <footer className="mx-auto flex w-full max-w-[1180px] flex-wrap items-center justify-center gap-x-4 gap-y-1 px-5 pb-5 text-xs text-ink-faint sm:justify-between sm:px-8">
+      <footer className="safe-bottom mx-auto flex w-full max-w-[1180px] flex-wrap items-center justify-center gap-x-4 gap-y-1 px-5 pb-5 text-xs text-ink-faint sm:justify-between sm:px-8">
         <span className="flex items-center gap-1.5">
           <span className={`h-1.5 w-1.5 rounded-full ${durable ? 'bg-accent' : 'bg-ink-faint'}`} />
           {durable === null
