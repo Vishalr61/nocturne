@@ -70,7 +70,17 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
-const POS_LABEL = { n: 'noun', v: 'verb', a: 'adj.', r: 'adv.' } as const
+const POS_LABEL = {
+  n: 'noun',
+  v: 'verb',
+  a: 'adj.',
+  r: 'adv.',
+  m: 'modal',
+  u: 'pron.',
+  d: 'det.',
+  p: 'prep.',
+  c: 'conj.',
+} as const
 
 /** The word under a screen point, from the caret position — no selection made. */
 function wordAtPoint(x: number, y: number): { word: string; rect: DOMRect } | null {
@@ -2062,11 +2072,21 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             ) : (
               <>
                 <p className="font-serif text-[15px] font-semibold">{defCard.res.word}</p>
-                <ol className="mt-2 space-y-1.5">
-                  {defCard.res.senses.slice(0, 4).map((s, i) => (
+                <ol className="mt-2 max-h-[46vh] space-y-2.5 overflow-y-auto">
+                  {defCard.res.senses.slice(0, 5).map((s, i) => (
                     <li key={i} className="text-[13px] leading-snug text-ink-mid">
                       <span className="mr-1.5 italic opacity-60">{POS_LABEL[s.pos]}</span>
                       {s.def}
+                      {s.ex && (
+                        <span className="mt-0.5 block pl-3 text-[12px] italic text-ink-faint">
+                          “{s.ex}”
+                        </span>
+                      )}
+                      {s.syn && s.syn.length > 0 && (
+                        <span className="mt-0.5 block pl-3 text-[12px] text-accent/80">
+                          ≈ {s.syn.slice(0, 4).join(', ')}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ol>
