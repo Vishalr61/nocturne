@@ -50,7 +50,9 @@ import {
   setBookmarkNote,
   saveProfile,
   saveProgress,
+  logReading,
   saveThumb,
+  tintOf,
   touchBook,
   type Bookmark,
   type Highlight,
@@ -68,9 +70,45 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
-/** Define only offers itself for a single word — not a passage. */
-const isDefinable = (text: string) => /^[\p{L}\p{N}'’-]{1,32}$/u.test(text.trim())
 const POS_LABEL = { n: 'noun', v: 'verb', a: 'adj.', r: 'adv.' } as const
+
+/** The word under a screen point, from the caret position — no selection made. */
+function wordAtPoint(x: number, y: number): { word: string; rect: DOMRect } | null {
+  type CaretDoc = Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+  const doc = document as CaretDoc
+  let node: Node | null = null
+  let offset = 0
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(x, y)
+    if (r) {
+      node = r.startContainer
+      offset = r.startOffset
+    }
+  } else if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y)
+    if (p) {
+      node = p.offsetNode
+      offset = p.offset
+    }
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE) return null
+  const text = node.textContent ?? ''
+  const isWordChar = (c: string) => /[\p{L}\p{N}'’-]/u.test(c)
+  let a = offset
+  let b = offset
+  while (a > 0 && isWordChar(text[a - 1])) a--
+  while (b < text.length && isWordChar(text[b])) b++
+  if (b <= a) return null
+  const word = text.slice(a, b)
+  if (!/\p{L}/u.test(word) || word.length > 40) return null
+  const range = document.createRange()
+  range.setStart(node, a)
+  range.setEnd(node, b)
+  return { word, rect: range.getBoundingClientRect() }
+}
 
 /** A recolored page rendered to a 2D canvas, with its on-screen display size. */
 interface PageBitmap {
@@ -252,7 +290,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [noteFor, setNoteFor] = useState<number | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [marks, setMarks] = useState<Highlight[]>([]) // saved highlights, this book
-  const [markRects, setMarkRects] = useState<{ id: string; rects: HighlightRect[] }[]>([])
+  const [markRects, setMarkRects] = useState<
+    { id: string; color?: 'amber' | 'sage'; rects: HighlightRect[] }[]
+  >([])
   /** Select mode: while on, the text layer takes taps so you can select/copy.
    *  Paged mode only — its taps turn pages. Scroll and Text Mode have no tap
    *  zones, so selection there is always live, no mode. */
@@ -261,8 +301,26 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** A selection made in scroll mode (page-keyed, offsets valid) or Text Mode
    *  (offsets -1: reflowed text has no page character range to highlight). */
   const [flowSel, setFlowSel] = useState<{ page: number; sel: TextSelection } | null>(null)
-  /** Dictionary lookup for a selected word: idle → loading → result/none. */
-  const [definition, setDefinition] = useState<'idle' | 'loading' | 'none' | DictResult>('idle')
+  /** Definition card pinned to a double-tapped word. A SNAPSHOT, deliberately
+   *  independent of the live selection: iOS collapses the selection on the
+   *  very tap that asks for the definition, so anything anchored to it dies
+   *  before it can be read (the original mobile Define bug). */
+  const [defCard, setDefCard] = useState<{
+    word: string
+    x: number
+    y: number
+    res: 'loading' | 'none' | DictResult
+  } | null>(null)
+  const [dblTapDefine, setDblTapDefine] = useState(() => comfortBool('nocturne-dbltap-define', true))
+  /** One-handed reading: the left tap zone turns forward instead of back. */
+  const [leftTapForward, setLeftTapForward] = useState(() =>
+    comfortBool('nocturne-lefttap-fwd', false),
+  )
+  /** Auto theme: Paper during the day, your dark theme at night. */
+  const [autoTheme, setAutoTheme] = useState(() => comfortBool('nocturne-autotheme', false))
+  /** Where a TOC/search/scrubber jump left from — the "↩ back" pill's target.
+   *  Chained jumps keep the ORIGINAL origin; that's the place you left. */
+  const [backSpot, setBackSpot] = useState<number | null>(null)
   /**
    * The page and the geometry it was drawn with, published together. These must
    * never be separate pieces of state: a render where the page number had moved
@@ -875,10 +933,92 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
       localStorage.setItem('nocturne-footerstat', footerStat)
+      localStorage.setItem('nocturne-dbltap-define', dblTapDefine ? '1' : '0')
+      localStorage.setItem('nocturne-lefttap-fwd', leftTapForward ? '1' : '0')
+      localStorage.setItem('nocturne-autotheme', autoTheme ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat])
+  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat, dblTapDefine, leftTapForward, autoTheme])
+
+  // Reading stats: time is the gap between page arrivals (capped, so a
+  // put-down phone doesn't count the night), pages are forward movement
+  // (capped, so a TOC jump isn't "50 pages read"). Flushed to Dexie on a slow
+  // timer and when the tab hides — never per turn.
+  const statRef = useRef({ last: 0, prevPage: 0, ms: 0, pages: 0 })
+  useEffect(() => {
+    const now = Date.now()
+    const s = statRef.current
+    if (s.last > 0) {
+      const gap = now - s.last
+      if (gap > 0 && gap < 120_000) s.ms += gap
+    }
+    if (s.prevPage > 0 && page > s.prevPage) s.pages += Math.min(page - s.prevPage, 2)
+    s.prevPage = page
+    s.last = now
+  }, [page])
+  useEffect(() => {
+    const flush = () => {
+      const s = statRef.current
+      if (s.ms > 0 || s.pages > 0) {
+        void logReading(s.ms, s.pages)
+        s.ms = 0
+        s.pages = 0
+      }
+    }
+    const iv = window.setInterval(flush, 30_000)
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVis)
+      flush()
+    }
+  }, [])
+
+  // A deliberate jump (TOC, search, bookmark, scrubber, page box) records where
+  // you left, so one tap brings you back — losing your spot to a curious TOC
+  // tap is the classic reader-app paper cut.
+  const jumpTo = useCallback((p: number) => {
+    const cur = pageRef.current
+    if (Math.abs(p - cur) > 2) setBackSpot((b) => (b == null ? cur : b))
+    setPage(p)
+  }, [])
+
+  // The pill retires once you're back in the neighbourhood — by tap or by
+  // paging there yourself — and never survives into another book.
+  useEffect(() => {
+    if (backSpot != null && Math.abs(page - backSpot) <= 1) setBackSpot(null)
+  }, [page, backSpot])
+  useEffect(() => {
+    setBackSpot(null)
+  }, [docVersion])
+
+  // Auto theme: Paper during the day (07–19), your dark theme at night. Only
+  // acts when the day/night bucket CHANGES (or a book opens), so picking a
+  // theme by hand always wins until the next boundary — the app must never
+  // fight the reader over the palette.
+  const themeBucket = useRef<'day' | 'night' | null>(null)
+  useEffect(() => {
+    if (!autoTheme) {
+      themeBucket.current = null
+      return
+    }
+    const apply = (force: boolean) => {
+      const hour = new Date().getHours()
+      const bucket: 'day' | 'night' = hour >= 7 && hour < 19 ? 'day' : 'night'
+      if (!force && themeBucket.current === bucket) return
+      themeBucket.current = bucket
+      setThemeId((cur) =>
+        bucket === 'day' ? 'paper' : cur === 'paper' ? DEFAULT_THEME.id : cur,
+      )
+    }
+    apply(true)
+    const iv = window.setInterval(() => apply(false), 5 * 60 * 1000)
+    return () => window.clearInterval(iv)
+  }, [autoTheme, docVersion])
 
   // Keep the screen awake while reading — you shouldn't have to poke the phone
   // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
@@ -1117,7 +1257,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const onPageInput = (v: string) => {
     setPageStr(v)
     const n = Number(v)
-    if (Number.isInteger(n) && n >= 1 && n <= (pageCount || 1)) setPage(n)
+    if (Number.isInteger(n) && n >= 1 && n <= (pageCount || 1)) jumpTo(n)
   }
 
   // --- search -----------------------------------------------------------------
@@ -1202,6 +1342,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         setMarkRects(
           onPage.map((m) => ({
             id: m.id,
+            color: m.color,
             rects: rangeRects(view.pdfPage, pt, m.start, m.end, view.cssScale, view.crop),
           })),
         )
@@ -1241,11 +1382,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [])
 
   // Selections (and paged select mode) don't survive leaving the view they
-  // were made in.
+  // were made in; nor does a definition card (its position is viewport-pinned).
   useEffect(() => {
     setFlowSel(null)
     setSelection(null)
     setSelectMode(false)
+    setDefCard(null)
   }, [viewMode])
 
   // If the selected page's slot unmounts (scrolled far away), the DOM selection
@@ -1287,38 +1429,92 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [viewMode])
 
-  const saveHighlight = useCallback(async () => {
-    const id = loadedIdRef.current
-    // Record against the page the selection was actually made on, not the page
-    // state, which could have moved on.
-    if (!id || !activeSel || !activeSel.canMark) return
-    await addHighlight({
-      bookId: id,
-      page: activeSel.page,
-      start: activeSel.sel.start,
-      end: activeSel.sel.end,
-      text: activeSel.sel.text.slice(0, 400),
+  const saveHighlight = useCallback(
+    async (color: 'amber' | 'sage' = 'amber') => {
+      const id = loadedIdRef.current
+      // Record against the page the selection was actually made on, not the page
+      // state, which could have moved on.
+      if (!id || !activeSel || !activeSel.canMark) return
+      await addHighlight({
+        bookId: id,
+        page: activeSel.page,
+        start: activeSel.sel.start,
+        end: activeSel.sel.end,
+        text: activeSel.sel.text.slice(0, 400),
+        color,
+      })
+      setMarks(await listHighlights(id))
+      clearSelection()
+    },
+    [activeSel, clearSelection],
+  )
+
+  // Double-tap (touch) / double-click (mouse) on a word → definition card.
+  // The word comes from the caret position under the tap, not from a selection,
+  // so no native selection ever forms and iOS's edit callout never appears.
+  const defineAt = useCallback((x: number, y: number): boolean => {
+    const hit = wordAtPoint(x, y)
+    if (!hit) return false
+    setDefCard({
+      word: hit.word,
+      x: hit.rect.left + hit.rect.width / 2,
+      y: hit.rect.top,
+      res: 'loading',
     })
-    setMarks(await listHighlights(id))
-    clearSelection()
-  }, [activeSel, clearSelection])
+    void lookupWord(hit.word).then((res) => {
+      setDefCard((cur) => (cur && cur.word === hit.word ? { ...cur, res: res ?? 'none' } : cur))
+    })
+    return true
+  }, [])
 
-  // A new selection invalidates any definition in flight or on screen; the
-  // counter keeps a slow shard fetch from resolving onto a different word.
-  const defineSeq = useRef(0)
   useEffect(() => {
-    defineSeq.current++
-    setDefinition('idle')
-  }, [selection, flowSel])
+    if (!dblTapDefine) return
+    const isReaderText = (t: EventTarget | null) =>
+      t instanceof Element &&
+      !!t.closest('[data-text-layer] span[data-s], [data-textreader] p, [data-textreader] h2')
+    // Mouse: the browser's own double-click. It also selects the word natively;
+    // clear that so the selection popover doesn't pile on top of the card.
+    const onDblClick = (e: MouseEvent) => {
+      if (!isReaderText(e.target)) return
+      if (defineAt(e.clientX, e.clientY)) {
+        window.getSelection()?.removeAllRanges()
+      }
+    }
+    // Touch: a hand-rolled double-tap, so the second tap can be cancelled
+    // BEFORE WebKit turns it into a word selection (which would summon the
+    // system Copy/Look Up/Translate callout right over our card).
+    let last = { t: 0, x: 0, y: 0 }
+    const onTouchEnd = (e: TouchEvent) => {
+      const touch = e.changedTouches[0]
+      if (!touch || e.touches.length > 0) return
+      const now = Date.now()
+      const isDouble =
+        now - last.t < 350 && Math.hypot(touch.clientX - last.x, touch.clientY - last.y) < 32
+      last = { t: now, x: touch.clientX, y: touch.clientY }
+      if (!isDouble || !isReaderText(e.target)) return
+      if (defineAt(touch.clientX, touch.clientY)) {
+        e.preventDefault()
+        last.t = 0
+      }
+    }
+    document.addEventListener('dblclick', onDblClick)
+    document.addEventListener('touchend', onTouchEnd, { passive: false })
+    return () => {
+      document.removeEventListener('dblclick', onDblClick)
+      document.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [dblTapDefine, defineAt])
 
-  const defineSelection = useCallback(async () => {
-    const word = activeSel?.sel.text.trim()
-    if (!word) return
-    const seq = ++defineSeq.current
-    setDefinition('loading')
-    const res = await lookupWord(word)
-    if (defineSeq.current === seq) setDefinition(res ?? 'none')
-  }, [activeSel])
+  // The card dismisses on the next tap anywhere outside it.
+  useEffect(() => {
+    if (!defCard) return
+    const onDown = (e: PointerEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-defcard]')) return
+      setDefCard(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [defCard])
 
   const dropHighlight = useCallback(async (hid: string) => {
     const id = loadedIdRef.current
@@ -1338,9 +1534,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
   const openHit = useCallback((hit: SearchHit, q: string) => {
     setHighlightQuery(q)
-    setPage(hit.page)
+    jumpTo(hit.page)
     setShowSearch(false)
-  }, [])
+  }, [jumpTo])
 
   const closeSearch = useCallback(() => {
     setShowSearch(false)
@@ -1693,12 +1889,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         }}
       >
         {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
-            Inert in select mode, where a drag means "select", not "turn". */}
+            Inert in select mode, where a drag means "select", not "turn".
+            One-handed option: the left zone turns FORWARD too (back is still
+            a swipe or arrow key), so the thumb never has to travel. */}
         <button
-          aria-label="Previous page"
+          aria-label={leftTapForward ? 'Next page' : 'Previous page'}
           className="absolute inset-y-0 left-0 z-10 w-1/3 disabled:pointer-events-none"
           disabled={selectMode}
-          onClick={() => turn(-1)}
+          onClick={() => turn(leftTapForward ? 1 : -1)}
         />
         <button
           aria-label="Toggle controls"
@@ -1737,12 +1935,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
             {/* Saved highlights, then search matches, both drawn over the
                 recolored page. Pointer-events off so taps still turn pages. */}
-            {markRects.flatMap(({ id, rects }) =>
+            {markRects.flatMap(({ id, color, rects }) =>
               rects.map((r, i) => (
                 <div
                   key={`${id}-${i}`}
-                  className="pointer-events-none absolute rounded-[2px] bg-accent/[0.22]"
-                  style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+                  className="pointer-events-none absolute rounded-[2px]"
+                  style={{
+                    left: r.left,
+                    top: r.top,
+                    width: r.width,
+                    height: r.height,
+                    background: tintOf(color),
+                  }}
                 />
               )),
             )}
@@ -1799,68 +2003,76 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         )}
       </div>
 
-      {/* Selection popover: highlight, copy, and (for a single word) define.
-          One popover for every view — paged select mode, scroll, Text Mode. */}
+      {/* Selection popover: highlight and copy, in every view. Definitions
+          live on double-tap (the card below), not here — a button inside a
+          selection dies with it on iOS. */}
       {activeSel && (
         <div
           className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
+          style={{ left: activeSel.sel.x, top: Math.max(48, activeSel.sel.y - 10) }}
+        >
+          <div className="flex items-stretch overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+            {activeSel.canMark && (
+              <>
+                <button
+                  aria-label="Highlight (amber)"
+                  className="flex items-center px-3.5 py-2.5 hover:bg-night-800"
+                  onClick={() => void saveHighlight('amber')}
+                >
+                  <span className="h-4 w-4 rounded-full" style={{ background: '#c9a56a' }} />
+                </button>
+                <button
+                  aria-label="Highlight (sage)"
+                  className="flex items-center border-l border-line px-3.5 py-2.5 hover:bg-night-800"
+                  onClick={() => void saveHighlight('sage')}
+                >
+                  <span className="h-4 w-4 rounded-full" style={{ background: '#8fae8b' }} />
+                </button>
+              </>
+            )}
+            <button
+              className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid first:border-l-0 hover:bg-night-800"
+              onClick={() => {
+                void navigator.clipboard?.writeText(activeSel.sel.text)
+                clearSelection()
+              }}
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Definition card: pinned to the double-tapped word, dismissed by the
+          next tap anywhere else. */}
+      {defCard && (
+        <div
+          data-defcard
+          className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
           style={{
-            left:
-              definition === 'idle'
-                ? activeSel.sel.x
-                : Math.min(Math.max(activeSel.sel.x, 156), window.innerWidth - 156),
-            top: Math.max(48, activeSel.sel.y - 10),
+            left: Math.min(Math.max(defCard.x, 156), window.innerWidth - 156),
+            top: Math.max(48, defCard.y - 10),
           }}
         >
-          {definition === 'idle' ? (
-            <div className="flex overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
-              {activeSel.canMark && (
-                <button
-                  className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
-                  onClick={() => void saveHighlight()}
-                >
-                  ★ Highlight
-                </button>
-              )}
-              <button
-                className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid first:border-l-0 hover:bg-night-800"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(activeSel.sel.text)
-                  clearSelection()
-                }}
-              >
-                Copy
-              </button>
-              {isDefinable(activeSel.sel.text) && (
-                <button
-                  className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
-                  onClick={() => void defineSelection()}
-                >
-                  Define
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="w-72 max-w-[82vw] rounded-xl border border-line bg-panel p-4 text-left shadow-2xl">
-              {definition === 'loading' ? (
-                <p className="text-[13px] text-ink-mid">Looking up…</p>
-              ) : definition === 'none' ? (
-                <p className="text-[13px] text-ink-mid">No definition found.</p>
-              ) : (
-                <>
-                  <p className="font-serif text-[15px] font-semibold">{definition.word}</p>
-                  <ol className="mt-2 space-y-1.5">
-                    {definition.senses.slice(0, 4).map((s, i) => (
-                      <li key={i} className="text-[13px] leading-snug text-ink-mid">
-                        <span className="mr-1.5 italic opacity-60">{POS_LABEL[s.pos]}</span>
-                        {s.def}
-                      </li>
-                    ))}
-                  </ol>
-                </>
-              )}
-            </div>
-          )}
+          <div className="w-72 max-w-[82vw] rounded-xl border border-line bg-panel p-4 text-left shadow-2xl">
+            {defCard.res === 'loading' ? (
+              <p className="text-[13px] text-ink-mid">Looking up “{defCard.word}”…</p>
+            ) : defCard.res === 'none' ? (
+              <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
+            ) : (
+              <>
+                <p className="font-serif text-[15px] font-semibold">{defCard.res.word}</p>
+                <ol className="mt-2 space-y-1.5">
+                  {defCard.res.senses.slice(0, 4).map((s, i) => (
+                    <li key={i} className="text-[13px] leading-snug text-ink-mid">
+                      <span className="mr-1.5 italic opacity-60">{POS_LABEL[s.pos]}</span>
+                      {s.def}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -1891,7 +2103,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               max={pageCount}
               step={1}
               value={page}
-              onChange={(e) => setPage(Number(e.target.value))}
+              onChange={(e) => jumpTo(Number(e.target.value))}
               className="cozy-range min-w-[100px] flex-1"
               style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
             />
@@ -1920,6 +2132,31 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </button>
           )}
         </footer>
+      )}
+
+      {/* After a jump: one tap back to where you were reading. */}
+      {backSpot != null && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center">
+          <div className="pointer-events-auto flex items-center overflow-hidden rounded-full border border-line bg-panel/95 shadow-lg">
+            <button
+              className="px-4 py-1.5 text-xs font-semibold text-accent"
+              onClick={() => {
+                const spot = backSpot
+                setBackSpot(null)
+                if (spot != null) setPage(spot)
+              }}
+            >
+              ↩ Back to page {backSpot}
+            </button>
+            <button
+              aria-label="Dismiss"
+              className="border-l border-line px-2.5 py-1.5 text-xs text-ink-faint hover:text-ink-mid"
+              onClick={() => setBackSpot(null)}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       )}
 
       {/* While selecting, taps must not turn pages — say so, and offer the exit. */}
@@ -1975,6 +2212,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </span>
                 </button>
               ))}
+            </div>
+            <div className="mb-5 flex items-center justify-between rounded-xl bg-inset px-4 py-3">
+              <span className="text-[13px] text-ink-body">
+                Auto by time <span className="text-ink-faint">(Paper by day, dark at night)</span>
+              </span>
+              <IosToggle checked={autoTheme} onChange={setAutoTheme} label="Auto theme by time" />
             </div>
 
             <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
@@ -2220,6 +2463,26 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-[13px] text-ink-body">Auto-hide controls</span>
                 <IosToggle checked={autoHide} onChange={setAutoHide} label="Auto-hide controls" />
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-[13px] text-ink-body">
+                  Double-tap defines a word <span className="text-ink-faint">(dictionary)</span>
+                </span>
+                <IosToggle
+                  checked={dblTapDefine}
+                  onChange={setDblTapDefine}
+                  label="Double-tap defines a word"
+                />
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-[13px] text-ink-body">
+                  Left tap turns forward <span className="text-ink-faint">(one-handed)</span>
+                </span>
+                <IosToggle
+                  checked={leftTapForward}
+                  onChange={setLeftTapForward}
+                  label="Left tap turns forward"
+                />
               </div>
               {/* iOS Safari has no Vibration API — a toggle that can't do
                   anything shouldn't exist there. */}
@@ -2526,7 +2789,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                       <button
                         className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
                         onClick={() => {
-                          setPage(b.page)
+                          jumpTo(b.page)
                           setShowToc(false)
                         }}
                       >
@@ -2569,7 +2832,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     <button
                       className="flex flex-1 items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
                       onClick={() => {
-                        setPage(m.page)
+                        jumpTo(m.page)
                         setShowToc(false)
                       }}
                     >
@@ -2601,7 +2864,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 className="flex w-full items-baseline justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-night-800"
                 style={{ paddingLeft: `${12 + t.depth * 16}px` }}
                 onClick={() => {
-                  setPage(t.page)
+                  jumpTo(t.page)
                   setShowToc(false)
                 }}
               >

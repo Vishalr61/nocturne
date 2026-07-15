@@ -10,12 +10,14 @@ import {
   isPersisted,
   listBooks,
   listGhostBooks,
+  readingStats,
   renameBook,
   requestPersistentStorage,
   storageEstimate,
   type Book,
   type KnownBook,
   type ProgressByBook,
+  type ReadingStats,
 } from '../storage/db'
 import {
   adoptSecret,
@@ -25,6 +27,16 @@ import {
   syncNow,
 } from '../storage/syncClient'
 import { importBook } from './import'
+
+/** Chromium's beforeinstallprompt event (not in the TS DOM lib). */
+interface InstallPromptEvent extends Event {
+  prompt(): Promise<void>
+}
+
+/** iPadOS reports itself as MacIntel; the touch-points check catches it. */
+const isIOS = () =>
+  /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
 // The library: a place to resume, not a file manager. A "Reading now" hero
 // leads with the last book and one-tap Resume — the whole product exists for
@@ -60,6 +72,25 @@ export function Shelf({ onOpen }: ShelfProps) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [filter, setFilter] = useState('')
+  const [sort, setSort] = useState<'recent' | 'title' | 'progress'>(() => {
+    const v = localStorage.getItem('nocturne-shelf-sort')
+    return v === 'title' || v === 'progress' ? v : 'recent'
+  })
+  const [stats, setStats] = useState<ReadingStats | null>(null)
+  // Install: Chromium hands us a deferred prompt; iOS has no API, only steps.
+  const [installEvt, setInstallEvt] = useState<InstallPromptEvent | null>(null)
+  const [showInstallHelp, setShowInstallHelp] = useState(false)
+  const installed =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    (navigator as unknown as { standalone?: boolean }).standalone === true
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault()
+      setInstallEvt(e as InstallPromptEvent)
+    }
+    window.addEventListener('beforeinstallprompt', onPrompt)
+    return () => window.removeEventListener('beforeinstallprompt', onPrompt)
+  }, [])
   const editRef = useRef<HTMLInputElement | null>(null)
   // Sync (opt-in, state-only). Books that live elsewhere show as "ghosts".
   const [ghosts, setGhosts] = useState<KnownBook[]>([])
@@ -83,6 +114,7 @@ export function Shelf({ onOpen }: ShelfProps) {
     ])
     setBooks(bs)
     setProgress(ps)
+    void readingStats().then(setStats)
     // One badge for "you've marked this book up", bookmarks + highlights.
     const total: Record<string, number> = { ...bm }
     for (const [id, n] of Object.entries(hl)) total[id] = (total[id] ?? 0) + n
@@ -232,7 +264,20 @@ export function Shelf({ onOpen }: ShelfProps) {
       : null
 
   const needle = filter.trim().toLowerCase()
-  const shown = !books ? [] : needle ? books.filter((b) => b.title.toLowerCase().includes(needle)) : books
+  const filtered = !books
+    ? []
+    : needle
+      ? books.filter((b) => b.title.toLowerCase().includes(needle))
+      : books
+  // listBooks() is already newest-first; the other orders sort a copy.
+  const shown =
+    sort === 'title'
+      ? [...filtered].sort((a, b) => a.title.localeCompare(b.title))
+      : sort === 'progress'
+        ? [...filtered].sort(
+            (a, b) => (progress[b.id]?.percent ?? 0) - (progress[a.id]?.percent ?? 0),
+          )
+        : filtered
 
   const meta = (b: Book) => {
     const p = progress[b.id]
@@ -348,9 +393,45 @@ export function Shelf({ onOpen }: ShelfProps) {
               </section>
             )}
 
+            {stats && stats.weekMin > 0 && (
+              <div className="mt-10 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded-2xl border border-line bg-inset/60 px-5 py-3.5 text-[13px] text-ink-mid">
+                <span className="font-serif text-[15px] text-ink-head">Your reading</span>
+                <span>
+                  {stats.todayMin} min today
+                  {stats.todayPages > 0 ? ` · ${stats.todayPages} pages` : ''}
+                </span>
+                <span>
+                  {stats.weekMin >= 90
+                    ? `${Math.floor(stats.weekMin / 60)} h ${stats.weekMin % 60} min this week`
+                    : `${stats.weekMin} min this week`}
+                </span>
+                {stats.streak > 1 && <span className="text-accent">{stats.streak}-day streak</span>}
+              </div>
+            )}
+
             <div className="mb-5 mt-12 flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="font-serif text-[22px] text-ink-head">Your shelf</h2>
               <div className="flex items-baseline gap-3">
+                {books.length > 1 && (
+                  <select
+                    aria-label="Sort books"
+                    className="rounded-lg border border-line bg-inset px-2 py-1 text-[13px] text-ink-body outline-none focus:border-accent/60"
+                    value={sort}
+                    onChange={(e) => {
+                      const v = e.target.value as 'recent' | 'title' | 'progress'
+                      setSort(v)
+                      try {
+                        localStorage.setItem('nocturne-shelf-sort', v)
+                      } catch {
+                        /* private mode */
+                      }
+                    }}
+                  >
+                    <option value="recent">Recent</option>
+                    <option value="title">Title</option>
+                    <option value="progress">Progress</option>
+                  </select>
+                )}
                 {books.length > 3 && (
                   <input
                     aria-label="Filter books"
@@ -431,7 +512,10 @@ export function Shelf({ onOpen }: ShelfProps) {
 
                     <div className="mt-1 flex items-baseline justify-between text-xs tabular-nums text-ink-dim">
                       <span className="truncate">{p ? `${pct}% · p. ${p.page}` : 'Not started'}</span>
-                      <span className="ml-2 flex-none">{p ? relTime(p.updatedAt) : ''}</span>
+                      <span className="ml-2 flex-none">
+                        {fmtBytes(b.size)}
+                        {p ? ` · ${relTime(p.updatedAt)}` : ''}
+                      </span>
                     </div>
 
                     <div className="absolute right-2 top-2 flex gap-1.5">
@@ -504,6 +588,36 @@ export function Shelf({ onOpen }: ShelfProps) {
           </>
         )}
       </main>
+
+      {/* Install: the one action that makes the library durable on iOS — an
+          installed app is exempt from Safari's storage cleanup. Chromium gets
+          the real prompt; iOS gets the two steps Apple allows us to describe. */}
+      {!installed && (
+        <div className="mx-auto w-full max-w-[1180px] px-5 pb-3 sm:px-8">
+          <button
+            className="w-full rounded-2xl border border-line bg-inset px-5 py-3.5 text-left transition-colors hover:border-accent/50"
+            onClick={() => {
+              if (installEvt) void installEvt.prompt()
+              else setShowInstallHelp((s) => !s)
+            }}
+          >
+            <span className="text-[14px] font-semibold text-accent">
+              Install Nocturne on this device
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-ink-dim">
+              An installed app is exempt from the browser's storage cleanup — your books and
+              progress stay put even if you don't open it for weeks.
+            </span>
+          </button>
+          {showInstallHelp && (
+            <p className="anim-fade mt-2 rounded-xl bg-inset px-4 py-3 text-xs leading-relaxed text-ink-mid">
+              {isIOS()
+                ? 'In Safari: tap the Share button, then “Add to Home Screen”. Nocturne appears as an app icon and opens full-screen.'
+                : 'In your browser menu, look for “Install Nocturne” or “Add to Home Screen”.'}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Durability: say plainly whether these books are safe here, and give
           the two escape hatches (backup file, restore) that make them so. */}

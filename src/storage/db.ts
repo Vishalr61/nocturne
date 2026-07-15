@@ -84,9 +84,20 @@ export interface Highlight {
   start: number
   end: number
   text: string
+  /** Pen colour ('amber' when absent — every highlight before colours existed). */
+  color?: 'amber' | 'sage'
   createdAt: number
   updatedAt?: number
 }
+
+/** Highlight tints, as painted over the page. Amber is the classic marker;
+ *  sage is the second pen for a different kind of note. */
+export const HIGHLIGHT_TINTS: Record<'amber' | 'sage', string> = {
+  amber: 'rgba(201, 165, 106, 0.24)',
+  sage: 'rgba(143, 174, 139, 0.28)',
+}
+export const tintOf = (c?: string) =>
+  HIGHLIGHT_TINTS[(c === 'sage' ? 'sage' : 'amber') as 'amber' | 'sage']
 
 /** A recorded deletion, kept so it propagates through sync (no resurrection).
  *  naturalKey is the plaintext logical key (e.g. "bookmark:<id>:<page>"), which
@@ -120,6 +131,15 @@ export interface SyncState {
   lastSyncAt?: number
 }
 
+/** One day of reading, accumulated locally. Never synced — stats are a
+ *  private mirror, not a leaderboard. */
+export interface ReadingDay {
+  /** Local calendar day, 'YYYY-MM-DD'. */
+  day: string
+  ms: number
+  pages: number
+}
+
 const db = new Dexie('nocturne') as Dexie & {
   books: EntityTable<Book, 'id'>
   profiles: EntityTable<Profile, 'bookId'>
@@ -130,6 +150,7 @@ const db = new Dexie('nocturne') as Dexie & {
   tombstones: EntityTable<Tombstone, 'naturalKey'>
   knownBooks: EntityTable<KnownBook, 'bookId'>
   syncState: EntityTable<SyncState, 'id'>
+  readingLog: EntityTable<ReadingDay, 'day'>
 }
 
 db.version(1).stores({
@@ -173,6 +194,71 @@ db.version(5).stores({
   knownBooks: 'bookId',
   syncState: 'id',
 })
+
+db.version(6).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+  highlights: 'id, bookId, [bookId+page]',
+  tombstones: 'naturalKey, deletedAt',
+  knownBooks: 'bookId',
+  syncState: 'id',
+  readingLog: 'day',
+})
+
+// --- reading stats --------------------------------------------------------
+
+const localDay = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+/** Credit reading time/pages to today's log (called by the reader, throttled). */
+export async function logReading(ms: number, pages: number): Promise<void> {
+  if (ms <= 0 && pages <= 0) return
+  const day = localDay()
+  await db.transaction('rw', db.readingLog, async () => {
+    const row = await db.readingLog.get(day)
+    await db.readingLog.put({ day, ms: (row?.ms ?? 0) + ms, pages: (row?.pages ?? 0) + pages })
+  })
+}
+
+export interface ReadingStats {
+  todayMin: number
+  todayPages: number
+  weekMin: number
+  /** Consecutive days ending today (or yesterday) with 5+ minutes read. */
+  streak: number
+}
+
+export async function readingStats(): Promise<ReadingStats> {
+  const rows = await db.readingLog.toArray()
+  const byDay = new Map(rows.map((r) => [r.day, r]))
+  const today = new Date()
+  const dayAt = (back: number) => {
+    const d = new Date(today)
+    d.setDate(d.getDate() - back)
+    return localDay(d)
+  }
+  const todayRow = byDay.get(dayAt(0))
+  let weekMs = 0
+  for (let i = 0; i < 7; i++) weekMs += byDay.get(dayAt(i))?.ms ?? 0
+  const counts = (back: number) => (byDay.get(dayAt(back))?.ms ?? 0) >= 5 * 60 * 1000
+  // The streak survives "today hasn't hit 5 minutes YET" — start from
+  // yesterday if today doesn't count on its own.
+  let streak = 0
+  let back = counts(0) ? 0 : 1
+  while (counts(back)) {
+    streak++
+    back++
+  }
+  return {
+    todayMin: Math.round((todayRow?.ms ?? 0) / 60000),
+    todayPages: todayRow?.pages ?? 0,
+    weekMin: Math.round(weekMs / 60000),
+    streak,
+  }
+}
 
 export async function addBook(book: Book): Promise<void> {
   await db.books.put({ ...book, updatedAt: book.updatedAt ?? Date.now() })
