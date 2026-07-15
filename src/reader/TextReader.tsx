@@ -463,9 +463,15 @@ export function TextReader({
   return (
     <div
       ref={scrollerRef}
+      data-textreader
       className="relative flex-1 overflow-y-auto overflow-x-hidden"
       style={{ background: bg, color: fg }}
-      onClick={onToggleChrome}
+      onClick={() => {
+        // The click that ends a text selection must not toggle the chrome.
+        const s = window.getSelection()
+        if (s && !s.isCollapsed) return
+        onToggleChrome()
+      }}
     >
       <div
         lang="en"

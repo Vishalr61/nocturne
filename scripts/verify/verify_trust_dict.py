@@ -63,7 +63,9 @@ with sync_playwright() as p:
     ok &= toc_canvas > 0 and toc_paras == 0
 
     # --- 3. dictionary define (same book, paged mode) ----------------------
-    page.reload()
+    page.reload()  # relaunch opens the shelf; resume the book from there
+    page.wait_for_selector("text=Resume reading", timeout=60000)
+    page.locator("text=Resume reading").click()
     page.wait_for_selector("button[aria-label='Reading settings']", timeout=60000)
     page.locator("button[aria-label='Reading settings']").click()
     page.wait_for_selector("text=Reading settings", timeout=5000)

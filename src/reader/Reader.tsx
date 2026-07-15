@@ -197,6 +197,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [docVersion, setDocVersion] = useState(0)
   const [title, setTitle] = useState('')
   const [page, setPage] = useState(1)
+  const pageRef = useRef(1)
+  pageRef.current = page
   const [pageCount, setPageCount] = useState(0)
   /** Scroll mode's exact strip position (page units) — persisted so reopening
    *  lands on the very line you left, not the page top. */
@@ -251,9 +253,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [noteDraft, setNoteDraft] = useState('')
   const [marks, setMarks] = useState<Highlight[]>([]) // saved highlights, this book
   const [markRects, setMarkRects] = useState<{ id: string; rects: HighlightRect[] }[]>([])
-  /** Select mode: while on, the text layer takes taps so you can select/copy. */
+  /** Select mode: while on, the text layer takes taps so you can select/copy.
+   *  Paged mode only — its taps turn pages. Scroll and Text Mode have no tap
+   *  zones, so selection there is always live, no mode. */
   const [selectMode, setSelectMode] = useState(false)
   const [selection, setSelection] = useState<TextSelection | null>(null)
+  /** A selection made in scroll mode (page-keyed, offsets valid) or Text Mode
+   *  (offsets -1: reflowed text has no page character range to highlight). */
+  const [flowSel, setFlowSel] = useState<{ page: number; sel: TextSelection } | null>(null)
   /** Dictionary lookup for a selected word: idle → loading → result/none. */
   const [definition, setDefinition] = useState<'idle' | 'loading' | 'none' | DictResult>('idle')
   /**
@@ -1207,22 +1214,94 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     }
   }, [view, marks])
 
+  // The one selection the popover acts on, wherever it was made. `canMark`
+  // is false when the text has no page character range (Text Mode reflow) —
+  // highlights persist as ranges, so there's nothing valid to store.
+  const activeSel = useMemo(() => {
+    if (selectMode && selection && view)
+      return { page: view.pageNo, sel: selection, canMark: true }
+    if (flowSel) return { page: flowSel.page, sel: flowSel.sel, canMark: flowSel.sel.start >= 0 }
+    return null
+  }, [selectMode, selection, view, flowSel])
+
+  const clearSelection = useCallback(() => {
+    setSelection(null)
+    setFlowSel(null)
+    window.getSelection()?.removeAllRanges()
+  }, [])
+
+  // Scroll mode reports per-page: a null from page N only clears page N's
+  // selection — other slots' nulls (every layer fires on selectionchange)
+  // must not clobber the live one.
+  const onFlowSelect = useCallback((pg: number, sel: TextSelection | null) => {
+    setFlowSel((cur) => {
+      if (sel) return { page: pg, sel }
+      return cur && cur.page === pg ? null : cur
+    })
+  }, [])
+
+  // Selections (and paged select mode) don't survive leaving the view they
+  // were made in.
+  useEffect(() => {
+    setFlowSel(null)
+    setSelection(null)
+    setSelectMode(false)
+  }, [viewMode])
+
+  // If the selected page's slot unmounts (scrolled far away), the DOM selection
+  // vanishes without that layer reporting null — its listener died with it.
+  useEffect(() => {
+    if (!flowSel) return
+    const check = () => {
+      const s = window.getSelection()
+      if (!s || s.isCollapsed) setFlowSel(null)
+    }
+    document.addEventListener('selectionchange', check)
+    return () => document.removeEventListener('selectionchange', check)
+  }, [flowSel])
+
+  // Text Mode: the column is real text — read the browser selection directly.
+  // No offsets (reflowed text has no stable page range), so define/copy only.
+  useEffect(() => {
+    if (viewMode !== 'text') return
+    const read = () => {
+      const s = window.getSelection()
+      if (!s || s.isCollapsed || s.rangeCount === 0) return
+      const range = s.getRangeAt(0)
+      const node = range.commonAncestorContainer
+      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement)
+      if (!el?.closest('[data-textreader]')) return
+      const text = s.toString()
+      if (!text.trim()) return
+      const r = range.getBoundingClientRect()
+      setFlowSel({
+        page: pageRef.current,
+        sel: { start: -1, end: -1, text, x: r.left + r.width / 2, y: r.top },
+      })
+    }
+    document.addEventListener('pointerup', read)
+    document.addEventListener('selectionchange', read)
+    return () => {
+      document.removeEventListener('pointerup', read)
+      document.removeEventListener('selectionchange', read)
+    }
+  }, [viewMode])
+
   const saveHighlight = useCallback(async () => {
     const id = loadedIdRef.current
     // Record against the page the selection was actually made on, not the page
     // state, which could have moved on.
-    if (!id || !selection || !view) return
+    if (!id || !activeSel || !activeSel.canMark) return
     await addHighlight({
       bookId: id,
-      page: view.pageNo,
-      start: selection.start,
-      end: selection.end,
-      text: selection.text.slice(0, 400),
+      page: activeSel.page,
+      start: activeSel.sel.start,
+      end: activeSel.sel.end,
+      text: activeSel.sel.text.slice(0, 400),
     })
     setMarks(await listHighlights(id))
-    setSelection(null)
-    window.getSelection()?.removeAllRanges()
-  }, [selection, view])
+    clearSelection()
+  }, [activeSel, clearSelection])
 
   // A new selection invalidates any definition in flight or on screen; the
   // counter keeps a slow shard fetch from resolving onto a different word.
@@ -1230,16 +1309,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     defineSeq.current++
     setDefinition('idle')
-  }, [selection])
+  }, [selection, flowSel])
 
   const defineSelection = useCallback(async () => {
-    const word = selection?.text.trim()
+    const word = activeSel?.sel.text.trim()
     if (!word) return
     const seq = ++defineSeq.current
     setDefinition('loading')
     const res = await lookupWord(word)
     if (defineSeq.current === seq) setDefinition(res ?? 'none')
-  }, [selection])
+  }, [activeSel])
 
   const dropHighlight = useCallback(async (hid: string) => {
     const id = loadedIdRef.current
@@ -1557,6 +1636,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           onToggleChrome={() => setChrome((c) => !c)}
           textCache={textCacheRef.current}
           highlights={marks}
+          onSelect={onFlowSelect}
           renderKey={`${docVersion}:${themeId}:${imageDim}:${cropMargins}:${cropBox ? 'c' : 'n'}`}
         />
       )}
@@ -1719,37 +1799,39 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         )}
       </div>
 
-      {/* Selection popover: highlight, copy, and (for a single word) define. */}
-      {selectMode && selection && (
+      {/* Selection popover: highlight, copy, and (for a single word) define.
+          One popover for every view — paged select mode, scroll, Text Mode. */}
+      {activeSel && (
         <div
           className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
           style={{
             left:
               definition === 'idle'
-                ? selection.x
-                : Math.min(Math.max(selection.x, 156), window.innerWidth - 156),
-            top: Math.max(48, selection.y - 10),
+                ? activeSel.sel.x
+                : Math.min(Math.max(activeSel.sel.x, 156), window.innerWidth - 156),
+            top: Math.max(48, activeSel.sel.y - 10),
           }}
         >
           {definition === 'idle' ? (
             <div className="flex overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+              {activeSel.canMark && (
+                <button
+                  className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
+                  onClick={() => void saveHighlight()}
+                >
+                  ★ Highlight
+                </button>
+              )}
               <button
-                className="px-4 py-2.5 text-[13px] font-semibold text-accent hover:bg-night-800"
-                onClick={() => void saveHighlight()}
-              >
-                ★ Highlight
-              </button>
-              <button
-                className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
+                className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid first:border-l-0 hover:bg-night-800"
                 onClick={() => {
-                  void navigator.clipboard?.writeText(selection.text)
-                  setSelection(null)
-                  window.getSelection()?.removeAllRanges()
+                  void navigator.clipboard?.writeText(activeSel.sel.text)
+                  clearSelection()
                 }}
               >
                 Copy
               </button>
-              {isDefinable(selection.text) && (
+              {isDefinable(activeSel.sel.text) && (
                 <button
                   className="border-l border-line px-4 py-2.5 text-[13px] text-ink-mid hover:bg-night-800"
                   onClick={() => void defineSelection()}
