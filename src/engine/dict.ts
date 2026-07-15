@@ -9,9 +9,17 @@
 // Framework-free: no React, no DOM beyond fetch. Never throws to the
 // caller — any fetch/parse failure resolves to null.
 
+/** n/v/a/r from WordNet; m modal · u pronoun · d determiner · p preposition ·
+ *  c conjunction from the curated function-word set (build-dict.mjs). */
+export type DictPos = 'n' | 'v' | 'a' | 'r' | 'm' | 'u' | 'd' | 'p' | 'c';
+
 export interface DictSense {
-  pos: 'n' | 'v' | 'a' | 'r';
+  pos: DictPos;
   def: string;
+  /** A usage example from the WordNet gloss, when it has one. */
+  ex?: string;
+  /** Other words in the same synset — synonyms for this sense. */
+  syn?: string[];
 }
 
 export interface DictResult {
@@ -20,8 +28,9 @@ export interface DictResult {
   senses: DictSense[];
 }
 
-/** Shard format: lemma → [[pos, definition], ...], most common sense first. */
-type Shard = Record<string, [string, string][]>;
+/** Shard format: lemma → [[pos, def, example?, synonyms?], ...], most common
+ *  sense first; trailing fields are omitted when empty. */
+type Shard = Record<string, [string, string, string?, string[]?][]>;
 type Morph = Record<string, string[]>;
 
 // ---------------------------------------------------------------------------
@@ -146,9 +155,9 @@ function detachmentCandidates(w: string): string[] {
 // ---------------------------------------------------------------------------
 // lookup
 
-const POS_CODES = ['n', 'v', 'a', 'r'] as const;
+const POS_CODES = ['n', 'v', 'a', 'r', 'm', 'u', 'd', 'p', 'c'] as const;
 
-function isPos(p: string): p is DictSense['pos'] {
+function isPos(p: string): p is DictPos {
   return (POS_CODES as readonly string[]).includes(p);
 }
 
@@ -160,9 +169,13 @@ async function sensesFor(word: string): Promise<DictSense[] | null> {
   const entry = shard[word];
   if (!Array.isArray(entry)) return null;
   const senses: DictSense[] = [];
-  for (const [pos, def] of entry) {
+  for (const [pos, def, ex, syn] of entry) {
     const p = pos === 's' ? 'a' : pos; // adjective satellite → adjective
-    if (isPos(p) && typeof def === 'string') senses.push({ pos: p, def });
+    if (!isPos(p) || typeof def !== 'string') continue;
+    const sense: DictSense = { pos: p, def };
+    if (typeof ex === 'string' && ex) sense.ex = ex;
+    if (Array.isArray(syn) && syn.length) sense.syn = syn.filter((s) => typeof s === 'string');
+    senses.push(sense);
   }
   return senses.length > 0 ? senses : null;
 }
