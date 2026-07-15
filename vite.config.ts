@@ -64,6 +64,20 @@ export default defineConfig({
       workbox: {
         // pdf.js worker + wasm can be large; lift the precache size ceiling.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+        // The dictionary is ~9.5MB of shards; precaching it would balloon every
+        // install for a feature many sessions never touch. Fetch on first
+        // lookup, then cache-first so definitions keep working offline.
+        globIgnores: ['**/dict/**'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.includes('/dict/en/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'nocturne-dict',
+              expiration: { maxEntries: 40 },
+            },
+          },
+        ],
       },
     }),
   ],

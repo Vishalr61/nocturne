@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy } from '../engine/pdf'
 import { getPageText, type TextCache } from '../engine/search'
-import { reconstructPage, stitch, spansText, type Block, type ImageBlock, type Span } from '../engine/reflow'
+import { reconstructPageScored, stitch, spansText, type Block, type ImageBlock, type Span } from '../engine/reflow'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
@@ -230,7 +230,14 @@ export function TextReader({
         return areaFrac >= 0.004 && areaFrac <= 0.85 && Math.min(r.w, r.h) > pageH * 0.02
       })
       const pt = await getPageText(pdfPage, textCache, /* ensureStyle */ true)
-      const blocks = reconstructPage(pt, inlineRects)
+      const { blocks, quality } = reconstructPageScored(pt, inlineRects)
+      // Low confidence means the reconstruction would read wrong (interleaved
+      // columns, a table as word soup). Show the recolored page instead —
+      // worst case looks like scroll mode, never like mangled prose.
+      if (quality.confidence < 0.5) {
+        const img = await renderPageImage(pdfPage)
+        if (img) return img
+      }
       const imgBlocks = blocks.filter((b): b is ImageBlock => b.kind === 'img')
       const crops = imgBlocks.length ? await renderInlineCrops(pdfPage, imgBlocks) : undefined
       return { page: pageNo, kind: 'text', blocks, crops }
@@ -484,6 +491,14 @@ export function TextReader({
                 // An illustration kept in the flow (chapter-divider icon, figure).
                 const crop = it.crops?.get(b)
                 return crop ? <InlineImage key={i} crop={crop} /> : null
+              }
+              if (b.kind === 'sep') {
+                // A scene break: quiet, centered, unmistakably deliberate.
+                return (
+                  <div key={i} aria-hidden className="my-8 text-center opacity-50" style={{ letterSpacing: '0.6em' }}>
+                    * * *
+                  </div>
+                )
               }
               if (b.kind === 'h') {
                 // Short headings (chapter markers like "[ 1 ]") read best

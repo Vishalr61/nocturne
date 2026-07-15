@@ -64,7 +64,7 @@ export function startReadAloud(opts: {
         opts.onPage?.(p)
         for (const b of blocks) {
           if (cancelled) return
-          if (b.kind === 'img') continue // nothing to say about a picture
+          if (b.kind === 'img' || b.kind === 'sep') continue // nothing to say
           const text = spansText(b.spans).trim()
           if (!text) continue
           for (const s of sentences(text)) {
