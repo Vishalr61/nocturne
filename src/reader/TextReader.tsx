@@ -466,10 +466,13 @@ export function TextReader({
       data-textreader
       className="relative flex-1 overflow-y-auto overflow-x-hidden"
       style={{ background: bg, color: fg }}
-      onClick={() => {
-        // The click that ends a text selection must not toggle the chrome.
+      onClick={(e) => {
+        // The click that ends a text selection must not toggle the chrome —
+        // nor a click on the prose itself (interacting with words shouldn't
+        // flash the navbar; the margins still toggle).
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
+        if (e.target instanceof Element && e.target.closest('p, h2')) return
         onToggleChrome()
       }}
     >

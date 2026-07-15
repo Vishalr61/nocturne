@@ -5,7 +5,7 @@ import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
 import type { Theme } from '../engine/theme'
-import type { Highlight } from '../storage/db'
+import { tintOf, type Highlight } from '../storage/db'
 import { TextLayer, type TextSelection } from './TextLayer'
 
 // Continuous (scroll) reading. A virtualized vertical strip: every page is a
@@ -406,10 +406,13 @@ export function ContinuousReader({
       className="relative flex-1 overflow-auto"
       // pan-x too so a zoomed (wider-than-screen) page can be panned sideways.
       style={{ touchAction: 'pan-x pan-y' }}
-      onClick={() => {
-        // The click that ends a text selection must not toggle the chrome.
+      onClick={(e) => {
+        // The click that ends a text selection must not toggle the chrome —
+        // nor a click ON text (interacting with words shouldn't flash the
+        // navbar; the margins and page gaps are the toggle surface).
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
+        if (e.target instanceof Element && e.target.closest('span[data-s]')) return
         onToggleChrome()
       }}
     >
@@ -474,7 +477,9 @@ function PageSlot({
   onSelect,
 }: PageSlotProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const [rects, setRects] = useState<{ id: string; left: number; top: number; w: number; h: number }[]>([])
+  const [rects, setRects] = useState<
+    { id: string; color?: 'amber' | 'sage'; left: number; top: number; w: number; h: number }[]
+  >([])
   // The page proxy + scale for the text layer — the SAME pair the canvas was
   // rendered with (contentWidth / effective width), per the overlay invariant.
   const [layer, setLayer] = useState<{ pdfPage: PDFPageProxy; cssScale: number } | null>(null)
@@ -534,6 +539,7 @@ function PageSlot({
           highlights.flatMap((h) =>
             rangeRects(pdfPage, pt, h.start, h.end, cssScale, crop).map((r) => ({
               id: h.id,
+              color: h.color,
               left: r.left,
               top: r.top,
               w: r.width,
@@ -567,8 +573,8 @@ function PageSlot({
           rects.map((r, i) => (
             <div
               key={`${r.id}-${i}`}
-              className="pointer-events-none absolute rounded-[2px] bg-accent/[0.22]"
-              style={{ left: r.left, top: r.top, width: r.w, height: r.h }}
+              className="pointer-events-none absolute rounded-[2px]"
+              style={{ left: r.left, top: r.top, width: r.w, height: r.h, background: tintOf(r.color) }}
             />
           ))}
         {canvas && layer && onSelect && (

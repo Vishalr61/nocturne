@@ -5,7 +5,7 @@ import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
 import type { Theme } from '../engine/theme'
-import type { Highlight } from '../storage/db'
+import { tintOf, type Highlight } from '../storage/db'
 
 // Two-page spread for landscape: an open-book view (left = current page, right =
 // the next), turning two at a time. Like the scroll reader it reuses the exact
@@ -283,7 +283,9 @@ interface LeafProps {
 
 function Leaf({ n, width, height, canvas, highlights, doc, crop, textCache }: LeafProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const [rects, setRects] = useState<{ id: string; left: number; top: number; w: number; h: number }[]>([])
+  const [rects, setRects] = useState<
+    { id: string; color?: 'amber' | 'sage'; left: number; top: number; w: number; h: number }[]
+  >([])
 
   // Mount the parent-owned canvas into a dedicated leaf node (never mixing
   // manual DOM with React children on one node — that crashes reconciliation).
@@ -316,6 +318,7 @@ function Leaf({ n, width, height, canvas, highlights, doc, crop, textCache }: Le
           highlights.flatMap((h) =>
             rangeRects(pdfPage, pt, h.start, h.end, cssScale, crop).map((r) => ({
               id: h.id,
+              color: h.color,
               left: r.left,
               top: r.top,
               w: r.width,
@@ -344,8 +347,8 @@ function Leaf({ n, width, height, canvas, highlights, doc, crop, textCache }: Le
         rects.map((r, i) => (
           <div
             key={`${r.id}-${i}`}
-            className="pointer-events-none absolute rounded-[2px] bg-accent/[0.22]"
-            style={{ left: r.left, top: r.top, width: r.w, height: r.h }}
+            className="pointer-events-none absolute rounded-[2px]"
+            style={{ left: r.left, top: r.top, width: r.w, height: r.h, background: tintOf(r.color) }}
           />
         ))}
     </div>

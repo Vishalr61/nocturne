@@ -137,11 +137,13 @@ in build order:
 5. **Comforts**: sleep timer, skip-back 15s, per-book voice/rate memory,
    spoken-position persistence.
 
-## 5. Reading stats (P1)
+## 5. Reading stats (P1) ✅
 
-Every top app has this and it's cheap for us: session time, pages/hour,
-per-book time, streaks. Local-only (Dexie), a small "your reading" card on
-the shelf. Also powers "time left in chapter" (§3).
+Shipped 2026-07-15: time accrues as capped gaps between page arrivals (a
+put-down phone doesn't count the night), pages as capped forward movement (a
+TOC jump isn't "50 pages read"); `readingLog` in Dexie, local-only, never
+synced. The shelf shows a quiet "Your reading" card — today, this week,
+streak. Later: per-book time, pages/hour.
 
 ## 6. OCR for scans (P1 — unlocks three features at once)
 
@@ -158,22 +160,29 @@ blocked item — positions and highlights should follow you.
 
 ## 8. Small finish work (P2, batched when touching the area)
 
-- **Theme scheduling**: auto-switch theme by time of day (Paper by day,
-  Soft Dark at night) — you landed on Paper *in the end*; the app should
-  learn the rhythm.
+- ✅ **Theme scheduling**: "Auto by time" toggle — Paper 07–19, your dark
+  theme at night. Manual picks always win until the next day/night boundary.
 - **Custom theme editor**: bg/fg pickers on the existing THEMES model.
-- **Tap-zone preferences**: left-tap-forward option (one-handed reading).
+- ✅ **Tap-zone preferences**: "Left tap turns forward" toggle (one-handed).
 - **Search**: diacritic-insensitive matching, recent searches.
-- ✅ **Dictionary lookup**: select a word → Define, in every view. Offline
-  WordNet 3.1, sharded under `public/dict/en/` (~9.5MB, fetched per letter
-  on first use, cache-first in the SW — never precached), lemmatization for
-  irregulars and inflections (`engine/dict.ts`). Paged mode keeps the "T"
-  select mode (taps turn pages there); scroll mode mounts the text layer
-  always-on (long-press selects, no mode) and offers highlights too; Text
-  Mode reads the DOM selection (define/copy — reflowed text has no page
-  range for a highlight to persist against).
-- **Highlights**: a second colour + margin dots in scroll mode.
-- **Library**: sort (recent / title / progress), storage usage per book.
+- ✅ **Back-to-spot pill**: any jump (TOC, search, scrubber, bookmark, page
+  box) offers "↩ Back to page N"; retires when you're back in the
+  neighbourhood.
+- ✅ **Dictionary lookup**: double-tap (or double-click) a word → definition
+  card. Reworked from a popover "Define" button after real-phone testing:
+  the word comes from the caret under the tap — no selection ever forms, so
+  iOS's Copy/Look Up callout never appears, and the card is a snapshot that
+  survives the selection collapsing (the bug that killed the button on
+  mobile). Offline WordNet 3.1, sharded under `public/dict/en/` (~9.5MB,
+  fetched per letter, cache-first in the SW — never precached),
+  lemmatization in `engine/dict.ts`. Toggleable in settings. Long-press
+  stays selection: highlight (two colours) + copy. In paged mode double-tap
+  needs select mode (taps turn pages).
+- ✅ **Highlights**: second colour (sage) next to amber in the popover.
+  Margin dots dropped — scroll mode renders the full highlight rects, so
+  dots would be redundant.
+- ✅ **Library**: sort (recent / title / progress), per-book size on the
+  tile, install-app button (real prompt on Chromium, steps on iOS).
 
 ## Explicitly not doing
 
