@@ -29,6 +29,7 @@ import {
 import { TextLayer, type TextSelection } from './TextLayer'
 import { lookupWord, type DictResult } from '../engine/dict'
 import { openEpub, looksLikeEpub, type EpubDoc } from '../engine/epub'
+import { loadPace, recordPace, timeLeft, paceReady } from '../engine/pace'
 import { EpubReader } from './EpubReader'
 import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
@@ -330,10 +331,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [page, setPage] = useState(1)
   const pageRef = useRef(1)
   pageRef.current = page
+  const pageCountRef = useRef(0)
+  const scrollOffRef = useRef<number | null>(null)
   const [pageCount, setPageCount] = useState(0)
+  pageCountRef.current = pageCount
   /** Scroll mode's exact strip position (page units) — persisted so reopening
    *  lands on the very line you left, not the page top. */
   const [scrollOff, setScrollOff] = useState<number | null>(null)
+  scrollOffRef.current = scrollOff
+  /** Per-book reading pace (local, capped-gap sampled); null until measured. */
+  const [pace, setPace] = useState<ReturnType<typeof loadPace>>(null)
   const [themeId, setThemeId] = useState(DEFAULT_THEME.id)
   const [imageDim, setImageDim] = useState(0.82)
   const [zoom, setZoom] = useState(1)
@@ -464,6 +471,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setView(null)
     setCropBox(null)
     setLoadError(null)
+    setPace(loadPace(bookId))
     epubRef.current?.dispose()
     epubRef.current = null
     setEpubDoc(null)
@@ -1077,18 +1085,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // put-down phone doesn't count the night), pages are forward movement
   // (capped, so a TOC jump isn't "50 pages read"). Flushed to Dexie on a slow
   // timer and when the tab hides — never per turn.
-  const statRef = useRef({ last: 0, prevPage: 0, ms: 0, pages: 0 })
+  const statRef = useRef({ last: 0, prevPage: 0, ms: 0, pages: 0, paceMs: 0, anchorPct: -1 })
+  const currentPct = useCallback((): number => {
+    const pc = pageCountRef.current
+    const ep = epubRef.current
+    if (ep) return ep.percentAt(pageRef.current - 1, scrollOffRef.current ?? 0) * 100
+    return pc ? (pageRef.current / pc) * 100 : 0
+  }, [])
+
   useEffect(() => {
     const now = Date.now()
     const s = statRef.current
     if (s.last > 0) {
       const gap = now - s.last
-      if (gap > 0 && gap < 120_000) s.ms += gap
+      if (gap > 0 && gap < 120_000) {
+        s.ms += gap
+        s.paceMs += gap
+      }
     }
     if (s.prevPage > 0 && page > s.prevPage) s.pages += Math.min(page - s.prevPage, 2)
+    if (s.anchorPct < 0) s.anchorPct = currentPct()
     s.prevPage = page
     s.last = now
-  }, [page])
+  }, [page, currentPct])
   useEffect(() => {
     const flush = () => {
       const s = statRef.current
@@ -1096,6 +1115,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         void logReading(s.ms, s.pages)
         s.ms = 0
         s.pages = 0
+      }
+      // Pace sample: active time vs percent advanced since the last anchor.
+      const id = loadedIdRef.current
+      const pct = currentPct()
+      if (id && s.paceMs > 0 && s.anchorPct >= 0 && pct > s.anchorPct) {
+        recordPace(id, s.paceMs, pct - s.anchorPct)
+        setPace(loadPace(id))
+        s.paceMs = 0
+        s.anchorPct = pct
       }
     }
     const iv = window.setInterval(flush, 30_000)
@@ -1108,7 +1136,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       document.removeEventListener('visibilitychange', onVis)
       flush()
     }
-  }, [])
+  }, [currentPct])
 
   // A deliberate jump (TOC, search, bookmark, scrubber, page box) records where
   // you left, so one tap brings you back — losing your spot to a curious TOC
@@ -1848,6 +1876,30 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   )
   const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
 
+  // Time-left estimates from the measured pace: chapter = to the next TOC
+  // entry, book = to the end. Hidden until ~10 minutes of signal exist.
+  const estimates = useMemo(() => {
+    if (!paceReady(pace)) return null
+    const pct = epubDoc
+      ? epubDoc.percentAt(page - 1, scrollOff ?? 0) * 100
+      : pageCount
+        ? (page / pageCount) * 100
+        : 0
+    const book = timeLeft(pace, 100 - pct)
+    let next: number | null = null
+    for (const t of toc) if (t.page > page && (next === null || t.page < next)) next = t.page
+    const endPct =
+      next !== null
+        ? epubDoc
+          ? epubDoc.percentAt(next - 1, 0) * 100
+          : pageCount
+            ? ((next - 1) / pageCount) * 100
+            : 100
+        : 100
+    const chapter = toc.length ? timeLeft(pace, Math.max(0, endPct - pct)) : null
+    return book || chapter ? { book, chapter } : null
+  }, [pace, page, pageCount, toc, epubDoc, scrollOff])
+
 
   return (
     <div
@@ -2090,6 +2142,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               >
                 ⚙ Customise…
               </button>
+              {estimates?.book && (
+                <p className="mt-2 text-center text-[10.5px] opacity-50">
+                  ~{estimates.book} left in this book
+                  {estimates.chapter ? ` · ${estimates.chapter} in chapter` : ''}
+                </p>
+              )}
             </div>
           </div>
         </>
@@ -2786,8 +2844,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
       {showToc && (
         <div className="anim-fade safe-top absolute inset-0 z-20 flex flex-col bg-night-950/95 text-ink-body backdrop-blur-sm">
-          <div className="flex items-center justify-between px-5 py-4">
-            <span className="font-serif text-lg text-ink-bright">Contents</span>
+          <div className="flex items-baseline justify-between px-5 py-4">
+            <span className="font-serif text-lg text-ink-bright">
+              Contents
+              {estimates && (
+                <span className="ml-3 text-[11px] font-sans not-italic text-ink-faint">
+                  {estimates.chapter ? `~${estimates.chapter} left in chapter` : ''}
+                  {estimates.chapter && estimates.book ? ' · ' : ''}
+                  {estimates.book ? `~${estimates.book} in the book` : ''}
+                </span>
+              )}
+            </span>
             <div className="flex items-center gap-2">
               {(bookmarks.length > 0 || marks.length > 0) && (
                 <button
