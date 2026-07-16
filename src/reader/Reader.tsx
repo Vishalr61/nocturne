@@ -1907,13 +1907,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 ))}
               </div>
 
-              {/* Every theme, one strip, scrolls right. */}
+              {/* Every theme, one strip, scrolls right. No labels — the swatch
+                  IS the label; Original wears colour dots (its point is that
+                  colours pass through untouched). */}
               <div className="-mx-1 mb-3 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
                 {THEMES.map((t) => (
                   <button
                     key={t.id}
                     aria-label={`${t.name} theme`}
-                    className={`w-[72px] flex-none snap-start rounded-xl border-2 px-1 pb-1.5 pt-2 text-center ${
+                    title={t.name}
+                    className={`h-[52px] w-[58px] flex-none snap-start rounded-xl border-2 ${
                       t.id === themeId ? 'border-accent' : 'border-transparent'
                     }`}
                     style={{
@@ -1922,15 +1925,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     }}
                     onClick={() => setThemeId(t.id)}
                   >
-                    <span className="block font-serif text-[16px]" style={{ color: rgbCss(t.fg) }}>
+                    <span className="block font-serif text-[18px]" style={{ color: rgbCss(t.fg) }}>
                       Aa
                     </span>
-                    <span
-                      className="block truncate text-[9.5px]"
-                      style={{ color: rgbCss(t.fg), opacity: 0.7 }}
-                    >
-                      {t.name}
-                    </span>
+                    {t.id === 'original' && (
+                      <span className="mt-0.5 flex justify-center gap-1">
+                        <i className="h-1.5 w-1.5 rounded-full" style={{ background: '#c25b4e' }} />
+                        <i className="h-1.5 w-1.5 rounded-full" style={{ background: '#5b8a5e' }} />
+                        <i className="h-1.5 w-1.5 rounded-full" style={{ background: '#4e6fa8' }} />
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -2334,7 +2338,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           {/* Customise (Books model): phone = bottom sheet, desktop = centered
               card. Themes and layout live in the Aa popover; this holds the
               rest, under a live preview of the current look. */}
-          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:max-h-[82vh] sm:w-[420px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]">
+          {/* Desktop centering uses inset-0 + m-auto + h-fit, NOT translates —
+              anim-panel's keyframes end at transform:none and would wipe them. */}
+          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]">
             <div className="mb-4 flex items-center justify-between">
               <div className="font-serif text-xl text-ink-bright">Customise</div>
               <button
