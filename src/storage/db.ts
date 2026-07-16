@@ -12,11 +12,14 @@ export interface Book {
   id: string // stable hash of the file bytes
   title: string
   addedAt: number
+  /** Pages for PDFs; CHAPTERS for EPUBs (page N = chapter N throughout). */
   pageCount: number
   size: number
-  data: ArrayBuffer // the original PDF, untouched
-  /** Small recolored render of page 1 (JPEG data URL) for the shelf. */
+  data: ArrayBuffer // the original file, untouched
+  /** Small cover render (JPEG data URL) for the shelf. */
   thumb?: string
+  /** 'pdf' when absent — every book that predates EPUB support. */
+  format?: 'pdf' | 'epub'
   lastOpenedAt?: number
   /** Last change to synced metadata (title); the LWW key. */
   updatedAt?: number

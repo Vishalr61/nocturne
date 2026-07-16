@@ -28,6 +28,8 @@ import {
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
 import { lookupWord, type DictResult } from '../engine/dict'
+import { openEpub, looksLikeEpub, type EpubDoc } from '../engine/epub'
+import { EpubReader } from './EpubReader'
 import { ContinuousReader } from './ContinuousReader'
 import { SpreadReader } from './SpreadReader'
 import { TextReader, TEXT_FONTS, fontStack, type ParaStyle } from './TextReader'
@@ -297,6 +299,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const textCacheRef = useRef<TextCache>(new Map())
   const docRef = useRef<PDFDocumentProxy | null>(null)
   const loadedIdRef = useRef<string | null>(null)
+  /** EPUB surface: when set, the whole PDF pipeline stands down. */
+  const [epubDoc, setEpubDoc] = useState<EpubDoc | null>(null)
+  const epubRef = useRef<EpubDoc | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // Blob image URLs belong to the epub doc; release them with the reader.
+  useEffect(() => () => epubRef.current?.dispose(), [])
 
   // Bumped when a new document is opened. draw() reads the doc from a ref, so it
   // needs a state dep to fire for a fresh book whose page/zoom/theme match the
@@ -435,6 +443,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setMarkRects([])
     setView(null)
     setCropBox(null)
+    setLoadError(null)
+    epubRef.current?.dispose()
+    epubRef.current = null
+    setEpubDoc(null)
     clsCacheRef.current.clear()
     textCacheRef.current.clear()
     setHighlightQuery('')
@@ -447,6 +459,46 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         onShelf() // deleted elsewhere; nothing to read
         return
       }
+
+      // EPUB: no pdf.js, no classification, no recolor — parse the container
+      // and map chapters onto the page plumbing (page N = chapter N), so
+      // progress, sync, bookmarks, the scrubber, and Contents work unchanged.
+      if (book.format === 'epub' || looksLikeEpub(new Uint8Array(book.data))) {
+        try {
+          const epub = await openEpub(new Uint8Array(book.data))
+          if (!alive) {
+            epub.dispose()
+            return
+          }
+          epubRef.current?.dispose()
+          epubRef.current = epub
+          setEpubDoc(epub)
+          loadedIdRef.current = bookId
+          setTitle(book.title)
+          setPageCount(epub.chapterCount)
+          setToc(epub.toc.map((t) => ({ title: t.title, page: t.chapter + 1, depth: 0 })))
+          void listBookmarks(bookId).then((bs) => {
+            if (alive) setBookmarks(bs)
+          })
+          const [profile, progress] = await Promise.all([getProfile(bookId), getProgress(bookId)])
+          if (!alive) return
+          if (profile) {
+            setThemeId(profile.themeId)
+          }
+          setPage(progress?.page ?? 1)
+          setScrollOff(progress?.offset ?? null)
+          setDocVersion((v) => v + 1)
+          setBusy(false)
+          void touchBook(bookId)
+        } catch (e) {
+          if (alive) {
+            setBusy(false)
+            setLoadError(e instanceof Error ? e.message : "Couldn't open this EPUB.")
+          }
+        }
+        return
+      }
+
       const doc = await openPdf(book.data)
       if (!alive) {
         void doc.destroy()
@@ -956,13 +1008,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     void saveProgress({
       bookId: id,
       page,
-      percent: pageCount ? page / pageCount : 0,
-      // Only scroll mode has a sub-page position; elsewhere clear it so a
-      // stale offset can't tug a later scroll-mode open away from `page`.
-      offset: viewMode === 'scroll' && scrollOff != null ? scrollOff : undefined,
+      // EPUB percent is spine-weighted by chapter length, not chapter/count.
+      percent: epubDoc
+        ? epubDoc.percentAt(page - 1, scrollOff ?? 0)
+        : pageCount
+          ? page / pageCount
+          : 0,
+      // Scroll mode and EPUBs have a sub-page position; elsewhere clear it so
+      // a stale offset can't tug a later open away from `page`.
+      offset: (viewMode === 'scroll' || epubDoc) && scrollOff != null ? scrollOff : undefined,
       updatedAt: Date.now(),
     })
-  }, [page, pageCount, scrollOff, viewMode])
+  }, [page, pageCount, scrollOff, viewMode, epubDoc])
 
   // A faint tick on page turn. iOS Safari doesn't expose the Vibration API, so
   // this is silent on iPhone and fires on Android/desktop Chrome.
@@ -1437,7 +1494,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // Text Mode: the column is real text — read the browser selection directly.
   // No offsets (reflowed text has no stable page range), so define/copy only.
   useEffect(() => {
-    if (viewMode !== 'text') return
+    if (viewMode !== 'text' && !epubDoc) return
     const read = () => {
       const s = window.getSelection()
       if (!s || s.isCollapsed || s.rangeCount === 0) return
@@ -1459,7 +1516,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       document.removeEventListener('pointerup', read)
       document.removeEventListener('selectionchange', read)
     }
-  }, [viewMode])
+  }, [viewMode, epubDoc])
 
   const saveHighlight = useCallback(
     async (color: 'amber' | 'sage' = 'amber') => {
@@ -1762,10 +1819,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // means in the current view — font size when reflowing, zoom otherwise.
   const stepSize = useCallback(
     (dir: 1 | -1) => {
-      if (viewMode === 'text') setTextSize((s) => Math.max(14, Math.min(30, s + dir)))
+      if (viewMode === 'text' || epubDoc) setTextSize((s) => Math.max(14, Math.min(30, s + dir)))
       else setZoom((z) => Math.max(1, Math.min(4, Math.round((z + dir * 0.25) * 4) / 4)))
     },
-    [viewMode],
+    [viewMode, epubDoc],
   )
   const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
 
@@ -1935,6 +1992,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 >
                   ◐
                 </button>
+{!epubDoc && (
                 <button
                   aria-label="Search in book"
                   className="w-12 rounded-xl py-2 opacity-80 hover:opacity-100"
@@ -1946,8 +2004,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 >
                   ⌕
                 </button>
+                )}
               </div>
 
+              {!epubDoc && (
               <div
                 className="mb-3 flex rounded-xl p-0.5"
                 style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
@@ -1964,6 +2024,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </button>
                 ))}
               </div>
+              )}
 
               {/* Every theme, one strip, scrolls right. No labels — the swatch
                   IS the label; Original wears colour dots (its point is that
@@ -2073,6 +2134,34 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         />
       )}
 
+      {epubDoc && docVersion > 0 && (
+        <EpubReader
+          epub={epubDoc}
+          chapter={page - 1}
+          onChapter={(c) => setPage(c + 1)}
+          initialFrac={scrollOff}
+          onFrac={setScrollOff}
+          fg={rgbCss(theme.fg)}
+          bg={chromeBg}
+          fontPx={textSize}
+          leading={textLeading}
+          family={fontStack(textFontId)}
+          maxWidth={textWidth}
+          justify={textJustify}
+          paraStyle={textPara}
+          onToggleChrome={() => setChrome((c) => !c)}
+        />
+      )}
+
+      {loadError && (
+        <div className="grid flex-1 place-items-center px-8 text-center">
+          <div>
+            <p className="font-serif text-lg opacity-80">Couldn't open this book.</p>
+            <p className="mt-2 text-sm opacity-50">{loadError}</p>
+          </div>
+        </div>
+      )}
+
       <div
         ref={containerRef}
         className="relative flex-1 overflow-auto"
@@ -2080,7 +2169,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           touchAction: 'pan-x pan-y',
           // Stay visible (showing "Loading…") until a replacement view can mount.
           display:
-            (viewMode === 'scroll' || viewMode === 'text' || spreadActive) && docVersion > 0
+            loadError || ((viewMode === 'scroll' || viewMode === 'text' || spreadActive || epubDoc) && docVersion > 0)
               ? 'none'
               : undefined,
         }}
@@ -2362,7 +2451,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </button>
             </div>
 
-            {viewMode === 'text' ? (
+            {viewMode === 'text' || epubDoc ? (
               <>
                 <div className="no-scrollbar -mx-1 mb-2 flex gap-2 overflow-x-auto px-1 pb-1">
                   {TEXT_FONTS.map((f) => (
@@ -2422,7 +2511,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     onTap={() => setTextPara(textPara === 'indent' ? 'spaced' : 'indent')}
                   />
                   <Tile icon="≣" label="Justify" on={textJustify} onTap={() => setTextJustify(!textJustify)} />
-                  {'speechSynthesis' in window && (
+                  {'speechSynthesis' in window && !epubDoc && (
                     <Tile
                       icon={reading ? '◼' : '▶'}
                       label={reading ? 'Stop' : 'Read aloud'}
@@ -2497,6 +2586,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
+            {!epubDoc && (<>
             <div className="mb-2 mt-3 flex items-baseline justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">
                 Export{exportRange ? ' · pages' : ''}
@@ -2573,6 +2663,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 {exportRange ? 'Whole book' : 'Pages'}
               </button>
             </div>
+            </>)}
           </div>
           </div>
         </>

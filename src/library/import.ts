@@ -1,4 +1,5 @@
 import { openPdf, type PDFDocumentProxy } from '../engine/pdf'
+import { openEpub, looksLikeEpub } from '../engine/epub'
 import { generateThumbnail } from '../engine/pipeline'
 import { DEFAULT_THEME } from '../engine/theme'
 import { addBook, getKnownBook, hashBytes, takePendingTitle } from '../storage/db'
@@ -11,6 +12,7 @@ import { addBook, getKnownBook, hashBytes, takePendingTitle } from '../storage/d
 export async function importBook(file: File): Promise<string> {
   const buf = await file.arrayBuffer()
   const id = await hashBytes(buf)
+  if (looksLikeEpub(new Uint8Array(buf), file.name)) return importEpub(id, buf, file)
   const doc = await openPdf(buf)
 
   let thumb: string | undefined
@@ -41,6 +43,50 @@ export async function importBook(file: File): Promise<string> {
   })
   await doc.destroy()
   return id
+}
+
+/** EPUB import: same content-hash identity and shelf shape as PDFs; the
+ *  "pageCount" slot carries the chapter count (page N = chapter N for EPUBs),
+ *  and the thumbnail comes from the declared cover image. */
+async function importEpub(id: string, buf: ArrayBuffer, file: File): Promise<string> {
+  const epub = await openEpub(new Uint8Array(buf))
+  let thumb: string | undefined
+  try {
+    if (epub.cover) thumb = await coverThumb(epub.cover.data, epub.cover.mime)
+  } catch {
+    // cosmetic only
+  }
+  const known = await getKnownBook(id)
+  const restored = known ? undefined : await takePendingTitle(id)
+  const title = known?.title ?? restored ?? epub.title ?? prettifyFilename(file.name)
+  await addBook({
+    id,
+    title,
+    addedAt: known?.addedAt ?? Date.now(),
+    pageCount: epub.chapterCount,
+    size: buf.byteLength,
+    data: buf,
+    thumb,
+    format: 'epub',
+    lastOpenedAt: Date.now(),
+    updatedAt: known?.updatedAt,
+  })
+  epub.dispose()
+  return id
+}
+
+/** Rasterize a cover image to the shelf thumbnail size (JPEG data URL). */
+async function coverThumb(data: Uint8Array, mime: string): Promise<string> {
+  const blob = new Blob([data.slice().buffer as ArrayBuffer], { type: mime })
+  const bmp = await createImageBitmap(blob)
+  const targetW = 220
+  const scale = targetW / bmp.width
+  const canvas = document.createElement('canvas')
+  canvas.width = targetW
+  canvas.height = Math.round(bmp.height * scale)
+  canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+  bmp.close()
+  return canvas.toDataURL('image/jpeg', 0.8)
 }
 
 /**
