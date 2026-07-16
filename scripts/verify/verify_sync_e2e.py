@@ -32,7 +32,7 @@ with sync_playwright() as p:
         time.sleep(0.6)
     a.locator("input[aria-label='Page number']").fill("42")
     time.sleep(3)  # progress persists on page change
-    a.locator("text=‹ Library").click()
+    a.locator("button[aria-label='Back to library']").click()
     time.sleep(1.5)
     a.locator("footer button:has-text('Sync')").click()
     time.sleep(0.8)
