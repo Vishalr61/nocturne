@@ -207,3 +207,18 @@ finished flags follow you; PDFs never leave the device.
 Feature branch `feature/reader-refinements`, no pushes until reviewed.
 Every change verified in the real app via the headless harness before it's
 called done; `npm run build` green at every commit.
+
+## 9. The EPUB arc ✅ (2026-07-16, PRs #21–23 — see docs/prd-epub-pace-vocab.md)
+
+- **EPUB input**: engine/epub.ts + reader/EpubReader.tsx. Chapters ride the
+  page plumbing (page N = chapter N); sanitized publisher HTML in Nocturne's
+  typography; covers, TOC, resume, dictionary, sync all work. Verified
+  against the real EPUB corpus (verify_epub.py). Open: highlights and
+  search inside EPUBs; fixed-layout books are refused.
+- **Vocabulary notebook**: ＋Save on the dictionary card → synced vocab
+  records; shelf card + notebook view (search, notes, delete/undo).
+  (Also fixed: the finished flag now rides progress sync.)
+- **Pace intelligence**: active-ms-per-percent, capped-gap sampled, 10-min
+  signal gate; time-left in Contents header, popover whisper, shelf hero.
+
+Next patch (agreed): read aloud professional pass, then OCR for scans.
