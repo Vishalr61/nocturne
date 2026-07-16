@@ -152,3 +152,20 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* EPUB chapters: the publisher's structure in Nocturne's dress. Sanitized
+   tags only (engine/epub.ts); typography comes from the reader's settings
+   on the container, these rules just keep the structure readable. */
+.nocturne-epub h1, .nocturne-epub h2 { font-size: 1.45em; line-height: 1.2; margin: 1.4em 0 0.7em; font-weight: 600; }
+.nocturne-epub h3, .nocturne-epub h4, .nocturne-epub h5, .nocturne-epub h6 { font-size: 1.15em; line-height: 1.25; margin: 1.2em 0 0.5em; font-weight: 600; }
+.nocturne-epub p { margin: 0; text-wrap: pretty; overflow-wrap: break-word; }
+.nocturne-epub .epub-spaced p, .nocturne-epub.epub-spaced p { margin-bottom: 0.9em; }
+.nocturne-epub section.epub-spaced p { margin-bottom: 0.9em; }
+.nocturne-epub section.epub-indent p + p { text-indent: 1.3em; }
+.nocturne-epub img { display: block; max-width: 100%; height: auto; margin: 1.2em auto; border-radius: 4px; }
+.nocturne-epub hr { border: 0; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); margin: 1.8em 15%; }
+.nocturne-epub blockquote { margin: 1em 0 1em 1.1em; padding-left: 0.9em; border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); }
+.nocturne-epub ul, .nocturne-epub ol { margin: 0.7em 0; padding-left: 1.5em; }
+.nocturne-epub pre { overflow-x: auto; font-size: 0.85em; padding: 0.8em; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; }
+.nocturne-epub table { border-collapse: collapse; margin: 1em 0; font-size: 0.9em; }
+.nocturne-epub td, .nocturne-epub th { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); padding: 0.3em 0.6em; }

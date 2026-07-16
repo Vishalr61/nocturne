@@ -346,7 +346,7 @@ export function Shelf({ onOpen }: ShelfProps) {
             {busy ? 'Adding…' : 'Add PDF'}
             <input
               type="file"
-              accept="application/pdf"
+              accept=".pdf,.epub,application/pdf,application/epub+zip"
               className="hidden"
               disabled={busy}
               onChange={(e) => e.target.files?.[0] && void onAdd(e.target.files[0])}
@@ -633,7 +633,7 @@ export function Shelf({ onOpen }: ShelfProps) {
                       </div>
                       <input
                         type="file"
-                        accept="application/pdf"
+                        accept=".pdf,.epub,application/pdf,application/epub+zip"
                         className="hidden"
                         disabled={busy}
                         onChange={(e) => e.target.files?.[0] && void onAdd(e.target.files[0])}
