@@ -74,7 +74,7 @@ with sync_playwright() as p:
     page.mouse.click(200, 800)  # dismiss card
     time.sleep(0.6)
 
-    # --- 2. chrome asymmetry: text tap hides but never summons ---------------
+    # --- 2. chrome: one tap anywhere toggles, both directions ----------------
     ensure_chrome(page)
     visible_before = page.locator("button[aria-label='Reading settings']").count()
 
@@ -90,20 +90,17 @@ with sync_playwright() as p:
         }""")
 
     spot2 = text_spot()
-    page.mouse.click(spot2["x"], spot2["y"])  # text tap with chrome visible → hides
+    page.mouse.click(spot2["x"], spot2["y"])  # tap ON text with chrome visible → hides
     time.sleep(0.6)
     after_hide = page.locator("button[aria-label='Reading settings']").count()
-    spot3 = text_spot()  # hiding chrome reflowed nothing (overlay) but recompute anyway
-    page.mouse.click(spot3["x"], spot3["y"])  # text tap with chrome hidden → stays hidden
+    spot3 = text_spot()
+    page.mouse.click(spot3["x"], spot3["y"])  # tap ON text with chrome hidden → shows
     time.sleep(0.6)
-    after_text = page.locator("button[aria-label='Reading settings']").count()
-    page.mouse.click(2, 500)  # margin tap summons
-    time.sleep(0.6)
-    after_margin = page.locator("button[aria-label='Reading settings']").count()
+    after_show = page.locator("button[aria-label='Reading settings']").count()
     print("2. chrome: before", visible_before, "| text-tap hides →", after_hide,
-          "| text-tap summons →", after_text, "| margin-tap →", after_margin, "=>",
-          "PASS" if visible_before == 1 and after_hide == 0 and after_text == 0 and after_margin == 1 else "FAIL")
-    ok &= visible_before == 1 and after_hide == 0 and after_text == 0 and after_margin == 1
+          "| text-tap shows →", after_show, "=>",
+          "PASS" if visible_before == 1 and after_hide == 0 and after_show == 1 else "FAIL")
+    ok &= visible_before == 1 and after_hide == 0 and after_show == 1
 
     # --- 3. back-to-spot pill ------------------------------------------------
     ensure_chrome(page)
@@ -167,7 +164,7 @@ with sync_playwright() as p:
     })""")
     page.reload()
     time.sleep(3)
-    stats_card = page.locator("text=Your reading").count()
+    stats_card = page.locator("text=streak").count()
     sort_sel = page.locator("select[aria-label='Sort books']").count()
     size_txt = page.locator("text=/\\d+(\\.\\d+)? MB/").count()
     install = page.locator("text=Install Nocturne").count()

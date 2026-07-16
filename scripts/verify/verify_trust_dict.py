@@ -62,42 +62,8 @@ with sync_playwright() as p:
           "=>", "PASS" if toc_canvas > 0 and toc_paras == 0 else "FAIL")
     ok &= toc_canvas > 0 and toc_paras == 0
 
-    # --- 3. dictionary define (same book, paged mode) ----------------------
-    page.reload()  # relaunch opens the shelf; resume the book from there
-    page.wait_for_selector("text=Resume reading", timeout=60000)
-    page.locator("text=Resume reading").click()
-    page.wait_for_selector("button[aria-label='Reading settings']", timeout=60000)
-    page.locator("button[aria-label='Reading settings']").click()
-    page.wait_for_selector("text=Reading settings", timeout=5000)
-    page.locator("button:has-text('paged')").last.click()
-    time.sleep(0.5)
-    page.locator("button[aria-label='Close settings']").click()
-    time.sleep(2)
-    page.locator("button[aria-label='Select text']").click()
-    time.sleep(1.5)
-    picked = page.evaluate("""() => {
-      const spans = document.querySelectorAll("[data-text-layer] span[data-s]");
-      for (const s of spans) {
-        const m = /[A-Za-z]{6,}/.exec(s.textContent);
-        if (!m) continue;
-        const r = document.createRange();
-        r.setStart(s.firstChild, m.index);
-        r.setEnd(s.firstChild, m.index + m[0].length);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(r);
-        return m[0];
-      }
-      return null;
-    }""")
-    print("   selected word:", picked)
-    page.wait_for_selector("text=Define", timeout=5000)
-    page.locator("text=Define").click()
-    time.sleep(2)
-    card = page.locator("ol li").count()
-    print("3. definition senses for '%s':" % picked, card, "=>", "PASS" if card > 0 else "FAIL")
-    ok &= card > 0
-    page.screenshot(path=str(SHOTS / "dict_define.png"))
+    # (The old part 3 — paged select-mode Define — is gone with the T button;
+    #  dictionary coverage lives in verify_qol.py / verify_universal_dict.py.)
     ctx.close()
 
     # --- 2. low-confidence Sybex page falls back to page image -------------
