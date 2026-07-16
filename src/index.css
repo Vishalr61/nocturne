@@ -4,14 +4,27 @@
 
 /* Installed (standalone) PWA: content draws under the iOS status bar and home
    indicator (viewport-fit=cover). Every fixed chrome surface pads itself clear
-   of them — without this the whole top navbar sits under the clock, unclickable. */
+   of them. max() keeps a floor of breathing room in the plain browser, where
+   the insets are 0 — a bare env() here silently REPLACED each surface's own
+   padding (same property, later rule wins) and glued chrome to the notch. */
 @layer utilities {
   .safe-top {
-    padding-top: env(safe-area-inset-top);
+    padding-top: max(env(safe-area-inset-top, 0px), 0.875rem);
   }
   .safe-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.875rem);
   }
+}
+
+/* The app owns every pixel: any overscroll or safe-area gap shows the app's
+   own ground (not a stray band), and nothing ever scrolls sideways. */
+html,
+body,
+#root {
+  height: 100%;
+  background: #171208;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
 }
 
 /* The single source of truth for the accent. Tailwind's `accent-*` colours and

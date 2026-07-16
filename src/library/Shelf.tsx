@@ -287,7 +287,7 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   return (
     <div
-      className="relative flex h-full flex-col overflow-y-auto font-sans text-ink-body"
+      className="relative flex h-full flex-col overflow-y-auto overflow-x-hidden font-sans text-ink-body"
       style={{ background: 'linear-gradient(180deg, #231b12 0%, #1a140c 420px, #171208 100%)' }}
     >
       {/* The current book's own art, blurred, lights the room (design B).
@@ -324,7 +324,7 @@ export function Shelf({ onOpen }: ShelfProps) {
           <span className="-ml-1 text-[13px] text-ink-soft">Library</span>
           <div className="flex-1" />
           {stats && stats.todayMin > 0 && (
-            <span className="whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-xs text-ink-mid backdrop-blur-md">
+            <span className="hidden whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-xs text-ink-mid backdrop-blur-md sm:inline-block">
               {stats.todayMin} min today
             </span>
           )}

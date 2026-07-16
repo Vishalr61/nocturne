@@ -301,7 +301,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // Comfort settings are device/environment preferences, not per-book, so they
   // live in localStorage (and don't sync).
   const [dim, setDim] = useState(() => comfortNum('nocturne-dim', 0))
-  const [autoHide, setAutoHide] = useState(() => comfortBool('nocturne-autohide', true))
   const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
@@ -357,15 +356,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     word: string
     x: number
     y: number
+    /** Word near the top of the screen → the card opens below it, not above. */
+    below: boolean
     res: 'loading' | 'none' | DictResult
   } | null>(null)
   const [dblTapDefine, setDblTapDefine] = useState(() => comfortBool('nocturne-dbltap-define', true))
-  /** One-handed reading: the left tap zone turns forward instead of back. */
-  const [leftTapForward, setLeftTapForward] = useState(() =>
-    comfortBool('nocturne-lefttap-fwd', false),
-  )
-  /** Auto theme: Paper during the day, your dark theme at night. */
-  const [autoTheme, setAutoTheme] = useState(() => comfortBool('nocturne-autotheme', false))
   /** Where a TOC/search/scrubber jump left from — the "↩ back" pill's target.
    *  Chained jumps keep the ORIGINAL origin; that's the place you left. */
   const [backSpot, setBackSpot] = useState<number | null>(null)
@@ -972,7 +967,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     try {
       localStorage.setItem('nocturne-dim', String(dim))
-      localStorage.setItem('nocturne-autohide', autoHide ? '1' : '0')
       localStorage.setItem('nocturne-haptics', haptics ? '1' : '0')
       localStorage.setItem('nocturne-textsize', String(textSize))
       localStorage.setItem('nocturne-textleading', String(textLeading))
@@ -982,12 +976,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textpara', textPara)
       localStorage.setItem('nocturne-footerstat', footerStat)
       localStorage.setItem('nocturne-dbltap-define', dblTapDefine ? '1' : '0')
-      localStorage.setItem('nocturne-lefttap-fwd', leftTapForward ? '1' : '0')
-      localStorage.setItem('nocturne-autotheme', autoTheme ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, autoHide, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat, dblTapDefine, leftTapForward, autoTheme])
+  }, [dim, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat, dblTapDefine])
 
   // Reading stats: time is the gap between page arrivals (capped, so a
   // put-down phone doesn't count the night), pages are forward movement
@@ -1044,30 +1036,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setBackSpot(null)
   }, [docVersion])
 
-  // Auto theme: Paper during the day (07–19), your dark theme at night. Only
-  // acts when the day/night bucket CHANGES (or a book opens), so picking a
-  // theme by hand always wins until the next boundary — the app must never
-  // fight the reader over the palette.
-  const themeBucket = useRef<'day' | 'night' | null>(null)
-  useEffect(() => {
-    if (!autoTheme) {
-      themeBucket.current = null
-      return
-    }
-    const apply = (force: boolean) => {
-      const hour = new Date().getHours()
-      const bucket: 'day' | 'night' = hour >= 7 && hour < 19 ? 'day' : 'night'
-      if (!force && themeBucket.current === bucket) return
-      themeBucket.current = bucket
-      setThemeId((cur) =>
-        bucket === 'day' ? 'paper' : cur === 'paper' ? DEFAULT_THEME.id : cur,
-      )
-    }
-    apply(true)
-    const iv = window.setInterval(() => apply(false), 5 * 60 * 1000)
-    return () => window.clearInterval(iv)
-  }, [autoTheme, docVersion])
-
   // Keep the screen awake while reading — you shouldn't have to poke the phone
   // mid-page. Re-acquired when the tab returns to the foreground (iOS drops it).
   useEffect(() => {
@@ -1098,9 +1066,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const hideTimer = useRef<number | undefined>(undefined)
   const bumpChrome = useCallback(() => {
     window.clearTimeout(hideTimer.current)
-    if (!autoHide || !chrome || showSettings || showSearch || showToc || selectMode) return
+    if (!chrome || showSettings || showSearch || showToc || selectMode) return
     hideTimer.current = window.setTimeout(() => setChrome(false), 4000)
-  }, [autoHide, chrome, showSettings, showSearch, showToc, selectMode])
+  }, [chrome, showSettings, showSearch, showToc, selectMode])
 
   useEffect(() => {
     bumpChrome()
@@ -1503,10 +1471,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const defineAt = useCallback((x: number, y: number): boolean => {
     const hit = wordAtPoint(x, y)
     if (!hit) return false
+    const below = hit.rect.top < 320
     setDefCard({
       word: hit.word,
       x: hit.rect.left + hit.rect.width / 2,
-      y: hit.rect.top,
+      y: below ? hit.rect.bottom : hit.rect.top,
+      below,
       res: 'loading',
     })
     void lookupWord(hit.word).then((res) => {
@@ -1885,6 +1855,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           initialOffset={scrollOff}
           onOffset={setScrollOff}
           onToggleChrome={() => setChrome((c) => !c)}
+          chromeVisible={chrome}
           textCache={textCacheRef.current}
           highlights={marks}
           onSelect={onFlowSelect}
@@ -1911,6 +1882,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           onPage={setPage}
           onFontSize={setTextSize}
           onToggleChrome={() => setChrome((c) => !c)}
+          chromeVisible={chrome}
         />
       )}
 
@@ -1943,15 +1915,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               : undefined,
         }}
       >
-        {/* Tap zones: left/right thirds turn pages, the middle toggles chrome.
-            Inert in select mode, where a drag means "select", not "turn".
-            One-handed option: the left zone turns FORWARD too (back is still
-            a swipe or arrow key), so the thumb never has to travel. */}
+        {/* Tap zones: BOTH side thirds turn forward (one-handed reading — the
+            thumb never travels; back is a swipe or the arrow keys), the middle
+            toggles chrome. Inert in select mode, where a drag means "select". */}
         <button
-          aria-label={leftTapForward ? 'Next page' : 'Previous page'}
+          aria-label="Next page"
           className="absolute inset-y-0 left-0 z-10 w-1/3 disabled:pointer-events-none"
           disabled={selectMode}
-          onClick={() => turn(leftTapForward ? 1 : -1)}
+          onClick={() => turn(1)}
         />
         <button
           aria-label="Toggle controls"
@@ -1972,7 +1943,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               aria-hidden
               className="pointer-events-none absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 select-none text-2xl opacity-20 sm:block"
             >
-              ‹
+              ›
             </div>
             <div
               aria-hidden
@@ -2103,32 +2074,41 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       {defCard && (
         <div
           data-defcard
-          className="anim-fade fixed z-40 -translate-x-1/2 -translate-y-full"
+          className={`anim-fade fixed z-40 -translate-x-1/2 ${defCard.below ? '' : '-translate-y-full'}`}
           style={{
-            left: Math.min(Math.max(defCard.x, 156), window.innerWidth - 156),
-            top: Math.max(48, defCard.y - 10),
+            left: Math.min(Math.max(defCard.x, 160), window.innerWidth - 160),
+            top: defCard.below ? defCard.y + 10 : Math.max(48, defCard.y - 10),
           }}
         >
-          <div className="w-72 max-w-[82vw] rounded-xl border border-line bg-panel p-4 text-left shadow-2xl">
+          <div className="w-[300px] max-w-[86vw] rounded-2xl border border-line bg-panel/95 p-4 text-left shadow-2xl backdrop-blur-xl">
             {defCard.res === 'loading' ? (
               <p className="text-[13px] text-ink-mid">Looking up “{defCard.word}”…</p>
             ) : defCard.res === 'none' ? (
               <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
             ) : (
               <>
-                <p className="font-serif text-[15px] font-semibold">{defCard.res.word}</p>
-                <ol className="mt-2 max-h-[46vh] space-y-2.5 overflow-y-auto">
-                  {defCard.res.senses.slice(0, 5).map((s, i) => (
-                    <li key={i} className="text-[13px] leading-snug text-ink-mid">
-                      <span className="mr-1.5 italic opacity-60">{POS_LABEL[s.pos]}</span>
+                <p className="border-b border-line/60 pb-2 font-serif text-[17px] text-ink-bright">
+                  {defCard.res.word}
+                  {defCard.word.toLowerCase() !== defCard.res.word && (
+                    <span className="ml-2 text-[12px] font-normal text-ink-faint">
+                      from “{defCard.word}”
+                    </span>
+                  )}
+                </p>
+                <ol className="mt-2.5 max-h-[44vh] space-y-3 overflow-y-auto">
+                  {defCard.res.senses.slice(0, 8).map((s, i) => (
+                    <li key={i} className="text-[13px] leading-snug text-ink-body">
+                      <span className="mr-1.5 rounded bg-inset px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                        {POS_LABEL[s.pos]}
+                      </span>
                       {s.def}
                       {s.ex && (
-                        <span className="mt-0.5 block pl-3 text-[12px] italic text-ink-faint">
-                          “{s.ex}”
+                        <span className="mt-1 block border-l-2 border-line/70 pl-2.5 text-[12px] italic text-ink-soft">
+                          {s.ex}
                         </span>
                       )}
                       {s.syn && s.syn.length > 0 && (
-                        <span className="mt-0.5 block pl-3 text-[12px] text-accent/80">
+                        <span className="mt-1 block text-[12px] text-accent/90">
                           ≈ {s.syn.slice(0, 4).join(', ')}
                         </span>
                       )}
@@ -2243,7 +2223,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="anim-fade fixed inset-0 z-30 bg-black/45"
             onClick={() => setShowSettings(false)}
           />
-          <div className="anim-panel safe-top safe-bottom fixed inset-y-0 right-0 z-40 w-[min(400px,100%)] overflow-y-auto border-l border-line/70 bg-panel/90 p-5 pb-10 font-sans text-ink-body shadow-[-12px_0_48px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
+          {/* Phone: a Books-style bottom sheet that takes only the height it
+              needs. Desktop (sm+): the familiar right-side panel. */}
+          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[76dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:safe-top sm:inset-y-0 sm:bottom-auto sm:left-auto sm:right-0 sm:max-h-none sm:w-[400px] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-10 sm:shadow-[-12px_0_48px_rgba(0,0,0,0.4)]">
             <div className="mb-6 flex items-center justify-between">
               <div className="font-serif text-xl text-ink-bright">Reading settings</div>
               <button
@@ -2279,14 +2261,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               ))}
             </div>
-            <div className="mb-6 flex items-center justify-between rounded-xl bg-inset px-4 py-2.5">
-              <span className="text-[13px] text-ink-body">
-                Auto by time <span className="text-ink-faint">(Paper by day)</span>
-              </span>
-              <IosToggle checked={autoTheme} onChange={setAutoTheme} label="Auto theme by time" />
-            </div>
-
-            <div className="mb-3 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+            <div className="mb-3 mt-6 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
               Layout
             </div>
             <div className="flex rounded-xl bg-inset p-1">
@@ -2436,7 +2411,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {/* Page image: zoom (paged/scroll, not spread), brightness, crop —
                 grouped as one card; none of it applies to reflow. */}
             {viewMode !== 'text' && (
-              <DrawerSection title="Page" hint="zoom · images · crop" defaultOpen>
+              <DrawerSection title="Page" hint="spread · zoom · crop" defaultOpen>
                 {viewMode === 'paged' && (
                   <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
                     <span className="text-[13px] text-ink-body">
@@ -2474,25 +2449,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     )}
                   </div>
                 )}
-                <div className="px-4 py-3">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[13px] text-ink-body">Image brightness</span>
-                    <span className="text-xs tabular-nums text-ink-soft">
-                      {Math.round(imageDim * 100)}%
-                    </span>
-                  </div>
-                  <input
-                    aria-label="Images"
-                    type="range"
-                    min={0.4}
-                    max={1}
-                    step={0.02}
-                    value={imageDim}
-                    onChange={(e) => setImageDim(Number(e.target.value))}
-                    className="cozy-range w-full"
-                    style={{ '--fill': `${((imageDim - 0.4) / 0.6) * 100}%` } as React.CSSProperties}
-                  />
-                </div>
                 {cropBox && (
                   <div className="flex items-center justify-between px-4 py-3">
                     <span className="text-[13px] text-ink-body">Crop margins</span>
@@ -2508,7 +2464,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             )}
 
             {/* Comfort: device/environment preferences, not per-book. */}
-            <DrawerSection title="Comfort" hint="dimmer · taps · dictionary">
+            <DrawerSection title="Comfort" hint="dimmer · dictionary · haptics">
               <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
               <div className="px-4 py-3">
                 <div className="mb-1.5 flex items-center justify-between">
@@ -2528,10 +2484,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 />
               </div>
               <div className="flex items-center justify-between px-4 py-3">
-                <span className="text-[13px] text-ink-body">Auto-hide controls</span>
-                <IosToggle checked={autoHide} onChange={setAutoHide} label="Auto-hide controls" />
-              </div>
-              <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-[13px] text-ink-body">
                   Double-tap defines a word <span className="text-ink-faint">(dictionary)</span>
                 </span>
@@ -2539,16 +2491,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   checked={dblTapDefine}
                   onChange={setDblTapDefine}
                   label="Double-tap defines a word"
-                />
-              </div>
-              <div className="flex items-center justify-between px-4 py-3">
-                <span className="text-[13px] text-ink-body">
-                  Left tap turns forward <span className="text-ink-faint">(one-handed)</span>
-                </span>
-                <IosToggle
-                  checked={leftTapForward}
-                  onChange={setLeftTapForward}
-                  label="Left tap turns forward"
                 />
               </div>
               {/* iOS Safari has no Vibration API — a toggle that can't do

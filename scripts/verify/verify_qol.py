@@ -74,30 +74,36 @@ with sync_playwright() as p:
     page.mouse.click(200, 800)  # dismiss card
     time.sleep(0.6)
 
-    # --- 2. chrome toggle: text no, margin yes ------------------------------
+    # --- 2. chrome asymmetry: text tap hides but never summons ---------------
     ensure_chrome(page)
     visible_before = page.locator("button[aria-label='Reading settings']").count()
-    # Recompute a glyph position NOW — showing the chrome reflowed the scroller,
-    # so step 1's coordinates may point at a line gap.
-    spot2 = page.evaluate("""() => {
-      const spans = document.querySelectorAll("[data-text-layer] span[data-s]");
-      for (const s of spans) {
-        if (!/[A-Za-z]{6,}/.test(s.textContent)) continue;
-        const r = s.getBoundingClientRect();
-        if (r.top > 160 && r.top < 640) return { x: r.left + Math.min(10, r.width / 2), y: r.top + r.height / 2 };
-      }
-      return null;
-    }""")
-    page.mouse.click(spot2["x"], spot2["y"])  # click ON text
+
+    def text_spot():
+        return page.evaluate("""() => {
+          const spans = document.querySelectorAll("[data-text-layer] span[data-s]");
+          for (const s of spans) {
+            if (!/[A-Za-z]{6,}/.test(s.textContent)) continue;
+            const r = s.getBoundingClientRect();
+            if (r.top > 160 && r.top < 640) return { x: r.left + Math.min(10, r.width / 2), y: r.top + r.height / 2 };
+          }
+          return null;
+        }""")
+
+    spot2 = text_spot()
+    page.mouse.click(spot2["x"], spot2["y"])  # text tap with chrome visible → hides
+    time.sleep(0.6)
+    after_hide = page.locator("button[aria-label='Reading settings']").count()
+    spot3 = text_spot()  # hiding chrome reflowed nothing (overlay) but recompute anyway
+    page.mouse.click(spot3["x"], spot3["y"])  # text tap with chrome hidden → stays hidden
     time.sleep(0.6)
     after_text = page.locator("button[aria-label='Reading settings']").count()
-    page.mouse.click(2, 500)  # click margin
+    page.mouse.click(2, 500)  # margin tap summons
     time.sleep(0.6)
     after_margin = page.locator("button[aria-label='Reading settings']").count()
-    print("2. chrome: before", visible_before, "| after text-click", after_text,
-          "| after margin-click", after_margin, "=>",
-          "PASS" if visible_before == 1 and after_text == 1 and after_margin == 0 else "FAIL")
-    ok &= visible_before == 1 and after_text == 1 and after_margin == 0
+    print("2. chrome: before", visible_before, "| text-tap hides →", after_hide,
+          "| text-tap summons →", after_text, "| margin-tap →", after_margin, "=>",
+          "PASS" if visible_before == 1 and after_hide == 0 and after_text == 0 and after_margin == 1 else "FAIL")
+    ok &= visible_before == 1 and after_hide == 0 and after_text == 0 and after_margin == 1
 
     # --- 3. back-to-spot pill ------------------------------------------------
     ensure_chrome(page)

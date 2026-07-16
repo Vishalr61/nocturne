@@ -48,6 +48,10 @@ interface ContinuousReaderProps {
    *  the parent persists it so reopening lands on the exact line. */
   onOffset?: (offset: number) => void
   onToggleChrome: () => void
+  /** Whether the chrome is currently shown — a tap on text may HIDE it (any
+   *  tap should dismiss), but must never summon it (interacting with words
+   *  shouldn't flash the navbar). */
+  chromeVisible?: boolean
   textCache: TextCache
   highlights: Highlight[]
   /** A selection made on a page's text layer (null when that page's selection
@@ -76,6 +80,7 @@ export function ContinuousReader({
   initialOffset,
   onOffset,
   onToggleChrome,
+  chromeVisible,
   textCache,
   highlights,
   onSelect,
@@ -407,12 +412,18 @@ export function ContinuousReader({
       // pan-x too so a zoomed (wider-than-screen) page can be panned sideways.
       style={{ touchAction: 'pan-x pan-y' }}
       onClick={(e) => {
-        // The click that ends a text selection must not toggle the chrome —
-        // nor a click ON text (interacting with words shouldn't flash the
-        // navbar; the margins and page gaps are the toggle surface).
+        // The click that ends a text selection must not toggle the chrome.
+        // A click ON text hides visible chrome (any tap should dismiss it)
+        // but never summons it — interacting with words shouldn't flash the
+        // navbar; the margins and page gaps are the summon surface.
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
-        if (e.target instanceof Element && e.target.closest('span[data-s]')) return
+        if (
+          !chromeVisible &&
+          e.target instanceof Element &&
+          e.target.closest('span[data-s]')
+        )
+          return
         onToggleChrome()
       }}
     >
