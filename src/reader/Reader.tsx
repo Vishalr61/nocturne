@@ -70,6 +70,65 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
+/** A Customise tap-tile: an on/off control as a small square, lit when on. */
+function Tile({
+  icon,
+  label,
+  on,
+  onTap,
+}: {
+  icon: string
+  label: string
+  on: boolean
+  onTap: () => void
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      className={`rounded-xl px-1 pb-2 pt-2.5 text-center text-[11px] transition-colors ${
+        on ? 'text-accent' : 'opacity-80'
+      }`}
+      style={{
+        background: on
+          ? 'color-mix(in srgb, currentColor 15%, transparent)'
+          : 'color-mix(in srgb, currentColor 7%, transparent)',
+      }}
+      onClick={onTap}
+    >
+      <span className="mb-1 block text-[15px] leading-none">{icon}</span>
+      {label}
+    </button>
+  )
+}
+
+/** An export format as a small chip; shows progress in place of its label. */
+function ExportChip({
+  icon,
+  label,
+  prog,
+  disabled,
+  onTap,
+}: {
+  icon: string
+  label: string
+  prog: number | null
+  disabled?: boolean
+  onTap: () => void
+}) {
+  return (
+    <button
+      className="tint-card rounded-xl px-1 pb-2 pt-2.5 text-center text-[10.5px] opacity-90 transition-opacity hover:opacity-100 disabled:opacity-40"
+      disabled={disabled || prog !== null}
+      onClick={onTap}
+    >
+      <span className="mb-1 block text-[14px] leading-none opacity-85">{icon}</span>
+      {prog !== null ? `${Math.round(prog * 100)}%` : label}
+    </button>
+  )
+}
+
 const POS_LABEL = {
   n: 'noun',
   v: 'verb',
@@ -1703,13 +1762,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const theme = themeById(themeId)
   const chromeBg = rgbCss(theme.bg)
   const hairline = 'color-mix(in srgb, currentColor 14%, transparent)'
-  // The footer's ghost capsule: borderless, barely-there glass so the scrubber
-  // stays legible over any page without reading as a box (design A).
-  const pill: React.CSSProperties = {
-    background: `color-mix(in srgb, ${chromeBg} 62%, transparent)`,
-    backdropFilter: 'blur(10px)',
-    WebkitBackdropFilter: 'blur(10px)',
-  }
 
   // The Aa popover's stepper: Books' size control, mapped to what "size"
   // means in the current view — font size when reflowing, zoom otherwise.
@@ -1749,44 +1801,98 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           style={{ opacity: dim }}
         />
       )}
-      {/* Quiet chrome (design A, Books-style): bare marks sitting directly on
-          the page — no glass, no boxes. Overlay, so toggling never reflows. */}
+      {/* The bottom bar: ALL chrome lives at the thumb — a distinct glass
+          panel holding the scrubber line and, beneath it, the marks. The top
+          of the screen belongs entirely to the book. */}
       {chrome && (
-        <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-[24] mx-auto flex w-full max-w-3xl items-center gap-4 px-4 pt-2 text-sm">
-          <button
-            aria-label="Back to library"
-            className="pointer-events-auto px-2 py-1.5 text-[17px] opacity-60 transition-opacity hover:opacity-100"
-            onClick={onShelf}
+        <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-[24] mx-auto w-full max-w-3xl px-3 pb-2">
+          <div
+            className="pointer-events-auto rounded-2xl px-4 pb-1 pt-2.5"
+            style={{
+              background: `color-mix(in srgb, ${chromeBg} 86%, ${rgbCss(theme.fg)} 6%)`,
+              border: `1px solid ${hairline}`,
+              boxShadow: '0 18px 44px -14px rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+            }}
           >
-            ‹
-          </button>
-          <div className="min-w-0 flex-1 text-center">
-            <span className="block truncate font-serif text-xs italic opacity-45">{title}</span>
-          </div>
-          <div className="pointer-events-auto flex items-center gap-1">
-            <button
-              aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
-              className={`px-2 py-1.5 transition-opacity hover:opacity-100 ${
-                marked ? 'text-accent opacity-100' : 'opacity-60'
-              }`}
-              onClick={() => void toggleBookmark()}
-            >
-              {marked ? '★' : '☆'}
-            </button>
-            <button
-              aria-label="Search in book"
-              className="px-2 py-1.5 opacity-60 transition-opacity hover:opacity-100"
-              onClick={() => setShowSearch(true)}
-            >
-              ⌕
-            </button>
-            <button
-              aria-label="Reading settings"
-              className="px-2 py-1.5 font-serif opacity-60 transition-opacity hover:opacity-100"
-              onClick={() => setShowQuick(true)}
-            >
-              Aa
-            </button>
+            <div className="flex items-center gap-3">
+              <input
+                aria-label="Page number"
+                type="text"
+                inputMode="numeric"
+                className="w-11 rounded-full border bg-transparent px-1 py-0.5 text-center text-[12px] tabular-nums"
+                style={{ borderColor: hairline }}
+                value={pageStr}
+                onChange={(e) => onPageInput(e.target.value)}
+                onBlur={() => setPageStr(String(page))}
+              />
+              {pageCount > 1 && (
+                <input
+                  aria-label="Go to page"
+                  type="range"
+                  min={1}
+                  max={pageCount}
+                  step={1}
+                  value={page}
+                  onChange={(e) => jumpTo(Number(e.target.value))}
+                  className="cozy-range min-w-[80px] flex-1"
+                  style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
+                />
+              )}
+              <button
+                className="whitespace-nowrap text-[11px] tabular-nums opacity-55 transition-opacity hover:opacity-90"
+                aria-label="Switch between percent and pages left in chapter"
+                onClick={() =>
+                  chapterLeft != null &&
+                  setFooterStat((s) => (s === 'percent' ? 'chapter' : 'percent'))
+                }
+              >
+                {footerStat === 'chapter' && chapterLeft != null
+                  ? `${chapterLeft} left in ch.`
+                  : pageCount
+                    ? `${Math.round((page / pageCount) * 100)}%`
+                    : ''}
+              </button>
+              {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
+                <button
+                  className="whitespace-nowrap text-[12px] opacity-70 transition-opacity hover:opacity-100"
+                  onClick={() => setShowToc(true)}
+                >
+                  Contents
+                </button>
+              )}
+            </div>
+            <div className="flex items-center">
+              <button
+                aria-label="Back to library"
+                className="px-2 py-1 text-[17px] opacity-65 transition-opacity hover:opacity-100"
+                onClick={onShelf}
+              >
+                ‹
+              </button>
+              <div className="min-w-0 flex-1 text-center">
+                <span className="block truncate font-serif text-[11px] italic opacity-45">
+                  {title}
+                </span>
+              </div>
+              <button
+                aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
+                className={`px-2.5 py-1 transition-opacity hover:opacity-100 ${
+                  marked ? 'text-accent opacity-100' : 'opacity-65'
+                }`}
+                onClick={() => void toggleBookmark()}
+              >
+                {marked ? '★' : '☆'}
+              </button>
+              <button
+                aria-label="Reading settings"
+                className="px-2.5 py-1 font-serif opacity-65 transition-opacity hover:opacity-100"
+                onClick={() => setShowQuick(true)}
+              >
+                Aa
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1800,9 +1906,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="fixed inset-0 z-30 cursor-default"
             onClick={() => setShowQuick(false)}
           />
-          <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-40 mx-auto w-full max-w-3xl px-3">
+          <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-3xl px-3">
             <div
-              className="anim-fade pointer-events-auto ml-auto mt-10 w-[278px] rounded-2xl p-3.5"
+              className="anim-fade pointer-events-auto mb-[86px] ml-auto w-[278px] rounded-2xl p-3.5"
               style={{
                 background: `color-mix(in srgb, ${chromeBg} 90%, ${rgbCss(theme.fg)} 5%)`,
                 border: `1px solid ${hairline}`,
@@ -1839,6 +1945,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   onClick={() => setDim((d) => (d >= 0.4 ? 0 : d >= 0.2 ? 0.4 : 0.2))}
                 >
                   ◐
+                </button>
+                <button
+                  aria-label="Search in book"
+                  className="w-12 rounded-xl py-2 opacity-80 hover:opacity-100"
+                  style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+                  onClick={() => {
+                    setShowQuick(false)
+                    setShowSearch(true)
+                  }}
+                >
+                  ⌕
                 </button>
               </div>
 
@@ -2185,69 +2302,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         </div>
       )}
 
-      {chrome && (
-        <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-[24] px-3 pb-3">
-          <footer
-            className="pointer-events-auto mx-auto flex max-w-xl items-center gap-3 rounded-full px-4 py-2"
-            style={pill}
-          >
-            <input
-              aria-label="Page number"
-              type="text"
-              inputMode="numeric"
-              className="w-11 rounded-full border bg-transparent px-1 py-0.5 text-center text-[13px] tabular-nums"
-              style={{ borderColor: hairline }}
-              value={pageStr}
-              onChange={(e) => onPageInput(e.target.value)}
-              onBlur={() => setPageStr(String(page))}
-            />
-            <span className="whitespace-nowrap text-xs tabular-nums opacity-50">
-              / {pageCount || '—'}
-            </span>
-
-            {pageCount > 1 && (
-              <input
-                aria-label="Go to page"
-                type="range"
-                min={1}
-                max={pageCount}
-                step={1}
-                value={page}
-                onChange={(e) => jumpTo(Number(e.target.value))}
-                className="cozy-range min-w-[100px] flex-1"
-                style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
-              />
-            )}
-
-            <button
-              className="whitespace-nowrap text-xs tabular-nums opacity-50 transition-opacity hover:opacity-90"
-              aria-label="Switch between percent and pages left in chapter"
-              onClick={() =>
-                chapterLeft != null && setFooterStat((s) => (s === 'percent' ? 'chapter' : 'percent'))
-              }
-            >
-              {footerStat === 'chapter' && chapterLeft != null
-                ? `${chapterLeft} left in ch.`
-                : pageCount
-                  ? `${Math.round((page / pageCount) * 100)}%`
-                  : ''}
-            </button>
-
-            {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
-              <button
-                className="whitespace-nowrap text-[13px] opacity-70 transition-opacity hover:opacity-100"
-                onClick={() => setShowToc(true)}
-              >
-                Contents
-              </button>
-            )}
-          </footer>
-        </div>
-      )}
 
       {/* After a jump: one tap back to where you were reading. */}
       {backSpot != null && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center">
+        <div className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center">
           <div className="pointer-events-auto flex items-center overflow-hidden rounded-full border border-line bg-panel/95 shadow-lg">
             <button
               className="px-4 py-1.5 text-xs font-semibold text-accent"
@@ -2272,7 +2330,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
       {/* While selecting, taps must not turn pages — say so, and offer the exit. */}
       {selectMode && !selection && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center">
+        <div className="pointer-events-none absolute inset-x-0 bottom-28 z-30 flex justify-center">
           <span className="rounded-full bg-panel/90 px-4 py-1.5 text-xs text-ink-mid shadow-lg">
             Select text to copy or highlight · page turns paused
           </span>
@@ -2287,274 +2345,156 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="anim-fade fixed inset-0 z-30 bg-black/45"
             onClick={() => setShowSettings(false)}
           />
-          {/* Customise (Books model): phone = bottom sheet, desktop = centered
-              card. Themes and layout live in the Aa popover; this holds the
-              rest, under a live preview of the current look. */}
-          {/* Desktop centering uses inset-0 + m-auto + h-fit, NOT translates —
-              anim-panel's keyframes end at transform:none and would wipe them. */}
+          {/* Customise, direction B: tap-tiles for the on/offs, slim rows for
+              the true sliders, export as chips. Phone = bottom sheet; desktop
+              = centered card (inset-0 + m-auto — anim-panel eats transforms). */}
           <div
-            className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t p-5 font-sans shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]"
+            className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t p-4 font-sans shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-5 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]"
             style={{
               background: `color-mix(in srgb, ${chromeBg} 90%, ${rgbCss(theme.fg)} 5%)`,
               color: rgbCss(theme.fg),
               borderColor: hairline,
             }}
           >
-            <div className="mb-4 flex items-center justify-between">
-              <div className="font-serif text-xl">Customise</div>
+            <div className="mb-3 flex items-center gap-2.5">
+              <div className="flex-1 font-serif text-lg">Customise</div>
+              {cls && <span className="text-[10px] opacity-40">page: {cls.kind}</span>}
               <button
                 aria-label="Close settings"
-                className="flex h-8 w-8 items-center justify-center rounded-full tint-card opacity-70 transition-colors hover:"
+                className="tint-card flex h-7 w-7 items-center justify-center rounded-full text-[11px] opacity-70 transition-opacity hover:opacity-100"
                 onClick={() => setShowSettings(false)}
               >
                 ✕
               </button>
             </div>
 
-            {/* Live preview: the current theme and (in Text Mode) type. */}
-            <div
-              className="mb-4 rounded-2xl px-4 pb-3 pt-2.5"
-              style={{
-                background: chromeBg,
-                color: rgbCss(theme.fg),
-                border: `1px solid ${hairline}`,
-              }}
-            >
-              <div className="font-serif text-2xl">Aa</div>
-              <p
-                className="mt-0.5 font-serif text-[12.5px]"
-                style={
-                  viewMode === 'text'
-                    ? {
-                        fontFamily: fontStack(textFontId),
-                        lineHeight: textLeading,
-                        textAlign: textJustify ? 'justify' : 'left',
-                      }
-                    : { lineHeight: 1.6 }
-                }
-              >
-                Glowing warmth radiated from the hole. I took a step, falling down a little further
-                than I anticipated.
-              </p>
-            </div>
-
-            {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
-            {viewMode === 'text' && (
+            {viewMode === 'text' ? (
               <>
-              <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Type</div>
-                <div className="mb-4 text-[10px] uppercase tracking-[0.14em] opacity-55">
-                  Font
-                </div>
-                <div className="mb-5 flex flex-wrap gap-2">
+                <div className="no-scrollbar -mx-1 mb-2 flex gap-2 overflow-x-auto px-1 pb-1">
                   {TEXT_FONTS.map((f) => (
                     <button
                       key={f.id}
-                      className={`rounded-xl border px-3 py-2.5 text-left leading-tight transition-colors ${
-                        textFontId === f.id
-                          ? 'border-accent bg-accent/10'
-                          : 'tint-border opacity-75'
+                      className={`flex-none rounded-xl border px-3.5 py-2 text-[13px] ${
+                        textFontId === f.id ? 'border-accent bg-accent/10' : 'tint-border opacity-80'
                       }`}
                       style={{ fontFamily: f.stack }}
                       onClick={() => setTextFontId(f.id)}
                     >
-                      <span className="text-[15px]">{f.name}</span>
+                      {f.name}
                     </button>
                   ))}
                 </div>
-
-                <div className="mb-6 divide-tint rounded-2xl tint-card">
-                  <div className="px-4 py-3">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] ">Text size</span>
-                      <span className="text-xs tabular-nums opacity-70">{textSize}px</span>
-                    </div>
-                    <div className="flex items-center gap-3.5">
-                      <span className="font-serif text-[13px] opacity-70">A</span>
-                      <input
-                        aria-label="Text size"
-                        type="range"
-                        min={14}
-                        max={30}
-                        step={1}
-                        value={textSize}
-                        onChange={(e) => setTextSize(Number(e.target.value))}
-                        className="cozy-range flex-1"
-                        style={{ '--fill': `${((textSize - 14) / 16) * 100}%` } as React.CSSProperties}
-                      />
-                      <span className="font-serif text-2xl opacity-70">A</span>
-                    </div>
-                  </div>
-                  <div className="px-4 py-3">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] ">Line spacing</span>
-                      <span className="text-xs tabular-nums opacity-70">
-                        {textLeading.toFixed(2)}
-                      </span>
-                    </div>
-                    <input
-                      aria-label="Line spacing"
-                      type="range"
-                      min={1.3}
-                      max={2.2}
-                      step={0.05}
-                      value={textLeading}
-                      onChange={(e) => setTextLeading(Number(e.target.value))}
-                      className="cozy-range w-full"
-                      style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
-                    />
-                  </div>
-                </div>
-
-                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] opacity-55">
-                  Reading width
-                </div>
-                <div className="mb-6 flex rounded-xl tint-card p-1">
-                  {(
-                    [
-                      ['Narrow', 520],
-                      ['Medium', 660],
-                      ['Wide', 820],
-                    ] as const
-                  ).map(([label, w]) => (
-                    <button
-                      key={w}
-                      className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                        textWidth === w ? 'bg-accent text-accent-on' : 'opacity-75'
-                      }`}
-                      onClick={() => setTextWidth(w)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] opacity-55">
-                  Paragraphs
-                </div>
-                <div className="mb-4 flex rounded-xl tint-card p-1">
-                  <button
-                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                      textPara === 'indent' ? 'bg-accent text-accent-on' : 'opacity-75'
-                    }`}
-                    onClick={() => setTextPara('indent')}
-                  >
-                    Indented
-                  </button>
-                  <button
-                    className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                      textPara === 'spaced' ? 'bg-accent text-accent-on' : 'opacity-75'
-                    }`}
-                    onClick={() => setTextPara('spaced')}
-                  >
-                    Spaced
-                  </button>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl tint-card px-4 py-3">
-                  <span className="text-[13px] ">
-                    Justify <span className="opacity-55">(+ hyphenate)</span>
-                  </span>
-                  <IosToggle
-                    checked={textJustify}
-                    onChange={setTextJustify}
-                    label="Justify text"
+                <div className="tint-card mb-2 flex items-center gap-3 rounded-xl px-3.5 py-2 text-[12.5px]">
+                  <span className="w-[88px] flex-none">Line spacing</span>
+                  <input
+                    aria-label="Line spacing"
+                    type="range"
+                    min={1.3}
+                    max={2.2}
+                    step={0.05}
+                    value={textLeading}
+                    onChange={(e) => setTextLeading(Number(e.target.value))}
+                    className="cozy-range flex-1"
+                    style={{ '--fill': `${((textLeading - 1.3) / 0.9) * 100}%` } as React.CSSProperties}
                   />
+                  <span className="w-9 text-right text-[11px] tabular-nums opacity-60">
+                    {textLeading.toFixed(2)}
+                  </span>
                 </div>
-              </>
-            )}
-
-            {/* Page image: zoom (paged/scroll, not spread), brightness, crop —
-                grouped as one card; none of it applies to reflow. */}
-            {viewMode !== 'text' && (
-              <>
-              <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Page</div>
-                {viewMode === 'paged' && (
-                  <div className="mb-3 flex items-center justify-between rounded-2xl tint-card px-4 py-3">
-                    <span className="text-[13px] ">
-                      Two-page spread <span className="opacity-55">(landscape)</span>
-                    </span>
-                    <IosToggle checked={spread} onChange={setSpread} label="Two-page spread" />
-                  </div>
-                )}
-                <div className="divide-tint rounded-2xl tint-card">
-                {!spreadActive && (
-                  <div className="px-4 py-3">
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] ">Zoom</span>
-                      <span className="text-xs tabular-nums opacity-70">{zoom.toFixed(1)}×</span>
-                    </div>
-                    <div className="flex items-center gap-3.5">
-                      <span className="font-serif text-[13px] opacity-70">A</span>
-                      <input
-                        aria-label="Zoom"
-                        type="range"
-                        min={1}
-                        max={4}
-                        step={0.1}
-                        value={zoom}
-                        onChange={(e) => setZoom(Number(e.target.value))}
-                        className="cozy-range flex-1"
-                        style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
-                      />
-                      <span className="font-serif text-2xl opacity-70">A</span>
-                    </div>
-                    {viewMode === 'scroll' && (
-                      <p className="mt-2 text-xs leading-relaxed opacity-55">
-                        At 1× the whole page fits the screen; slide up to fill the width.
-                      </p>
-                    )}
-                  </div>
-                )}
-                {cropBox && (
-                  <div className="flex items-center justify-between px-4 py-3">
-                    <span className="text-[13px] ">Crop margins</span>
-                    <IosToggle
-                      checked={cropMargins}
-                      onChange={setCropMargins}
-                      label="Crop margins"
+                <div className="tint-card mb-2 flex items-center gap-3 rounded-xl px-3.5 py-2 text-[12.5px]">
+                  <span className="w-[88px] flex-none">Width</span>
+                  <input
+                    aria-label="Reading width"
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={1}
+                    value={Math.max(0, [520, 660, 820].indexOf(textWidth))}
+                    onChange={(e) => setTextWidth([520, 660, 820][Number(e.target.value)])}
+                    className="cozy-range flex-1"
+                    style={{
+                      '--fill': `${(Math.max(0, [520, 660, 820].indexOf(textWidth)) / 2) * 100}%`,
+                    } as React.CSSProperties}
+                  />
+                  <span className="w-9 text-right text-[11px] opacity-60">
+                    {textWidth <= 520 ? 'Narrow' : textWidth >= 820 ? 'Wide' : 'Med'}
+                  </span>
+                </div>
+                <div className="mb-1 grid grid-cols-3 gap-2">
+                  <Tile
+                    icon="¶"
+                    label="Indent"
+                    on={textPara === 'indent'}
+                    onTap={() => setTextPara(textPara === 'indent' ? 'spaced' : 'indent')}
+                  />
+                  <Tile icon="≣" label="Justify" on={textJustify} onTap={() => setTextJustify(!textJustify)} />
+                  {'speechSynthesis' in window && (
+                    <Tile
+                      icon={reading ? '◼' : '▶'}
+                      label={reading ? 'Stop' : 'Read aloud'}
+                      on={reading}
+                      onTap={toggleReadAloud}
                     />
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-2 grid grid-cols-3 gap-2">
+                  {viewMode === 'paged' && (
+                    <Tile icon="⿻" label="Spread" on={spread} onTap={() => setSpread(!spread)} />
+                  )}
+                  {cropBox && (
+                    <Tile icon="◱" label="Crop" on={cropMargins} onTap={() => setCropMargins(!cropMargins)} />
+                  )}
+                  {'speechSynthesis' in window && (
+                    <Tile
+                      icon={reading ? '◼' : '▶'}
+                      label={reading ? 'Stop' : 'Read aloud'}
+                      on={reading}
+                      onTap={toggleReadAloud}
+                    />
+                  )}
+                </div>
+                {!spreadActive && (
+                  <div className="tint-card mb-1 flex items-center gap-3 rounded-xl px-3.5 py-2 text-[12.5px]">
+                    <span className="w-[88px] flex-none">Zoom</span>
+                    <input
+                      aria-label="Zoom"
+                      type="range"
+                      min={1}
+                      max={4}
+                      step={0.1}
+                      value={zoom}
+                      onChange={(e) => setZoom(Number(e.target.value))}
+                      className="cozy-range flex-1"
+                      style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
+                    />
+                    <span className="w-9 text-right text-[11px] tabular-nums opacity-60">
+                      {zoom.toFixed(1)}×
+                    </span>
                   </div>
                 )}
-                </div>
               </>
             )}
 
-                        <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Book</div>
-            {'speechSynthesis' in window && (
-              <div className="mb-3 flex items-center justify-between rounded-2xl tint-card px-4 py-3">
-                <span className="text-[13px] ">
-                  Read aloud <span className="opacity-55">(follows along)</span>
-                </span>
-                <button
-                  className={`rounded-full px-4 py-1.5 text-[13px] font-semibold transition-colors ${
-                    reading
-                      ? 'bg-accent text-accent-on'
-                      : 'border border-accent/40 text-accent hover:border-accent'
-                  }`}
-                  onClick={toggleReadAloud}
-                >
-                  {reading ? '◼ Stop' : '▶ Play'}
-                </button>
-              </div>
-            )}
-
-            {/* A finished export must never hide inside a folded section — the
-                Share row lives outside the Export group. */}
+            {/* A finished export must never hide — the Share row sits above the chips. */}
             {pendingSave && (
-              <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 tint-card px-4 py-3">
+              <div className="mb-2 mt-2 flex items-center justify-between gap-3 rounded-xl border border-accent/40 px-3.5 py-2.5">
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] ">{pendingSave.name}</div>
-                  <div className="text-[11px] opacity-55">Ready — send it to Files or Books</div>
+                  <div className="truncate text-[12.5px]">{pendingSave.name}</div>
+                  <div className="text-[10.5px] opacity-55">Ready — send it to Files or Books</div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button
-                    className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi"
+                    className="rounded-full bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-accent-on"
                     onClick={() => void sharePending()}
                   >
                     Share…
                   </button>
                   <button
                     aria-label="Discard export"
-                    className="flex h-7 w-7 items-center justify-center rounded-full tint-card opacity-70 transition-colors hover:"
+                    className="tint-card flex h-6 w-6 items-center justify-center rounded-full text-[10px] opacity-70"
                     onClick={() => setPendingSave(null)}
                   >
                     ✕
@@ -2563,26 +2503,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
-            {/* One export model: choose the scope (whole book or a page
-                range), then a format. Every format follows the current reading
-                setup — theme, image brightness, crop, Text Mode type — so what
-                you save is what you saw. */}
-            
-            <div className="flex rounded-xl tint-card p-1">
-              {([false, true] as const).map((r) => (
-                <button
-                  key={String(r)}
-                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold transition-colors ${
-                    exportRange === r ? 'bg-accent text-accent-on' : 'opacity-75'
-                  }`}
-                  onClick={() => setExportRange(r)}
-                >
-                  {r ? 'Page range' : 'Whole book'}
-                </button>
-              ))}
+            <div className="mb-2 mt-3 flex items-baseline justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">
+                Export{exportRange ? ' · pages' : ''}
+              </span>
+              {(epubErr || extractErr) && (
+                <span className="text-[10px] opacity-55">
+                  {epubErr ? 'EPUB needs a text layer (scans need OCR)' : 'Couldn’t extract from this PDF'}
+                </span>
+              )}
             </div>
             {exportRange && (
-              <div className="mt-2.5 flex items-center gap-2 px-1">
+              <div className="tint-card mb-2 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[12.5px]">
+                <span>From</span>
                 <input
                   aria-label="Export from page"
                   type="number"
@@ -2590,9 +2523,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   max={pageCount || 1}
                   value={extractFrom}
                   onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
-                  className="w-16 rounded-xl border tint-border tint-card px-2 py-2 text-center text-sm tabular-nums  outline-none focus:border-accent/60"
+                  className="tint-border w-14 rounded-lg border bg-transparent px-1 py-1 text-center text-[12px] tabular-nums outline-none focus:border-accent/60"
                 />
-                <span className="text-xs opacity-70">to</span>
+                <span>to</span>
                 <input
                   aria-label="Export to page"
                   type="number"
@@ -2600,91 +2533,52 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   max={pageCount || 1}
                   value={extractTo}
                   onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
-                  className="w-16 rounded-xl border tint-border tint-card px-2 py-2 text-center text-sm tabular-nums  outline-none focus:border-accent/60"
+                  className="tint-border w-14 rounded-lg border bg-transparent px-1 py-1 text-center text-[12px] tabular-nums outline-none focus:border-accent/60"
                 />
-                <span className="text-[11px] opacity-55">of {pageCount || '—'}</span>
-              </div>
-            )}
-            <div className="mt-3 divide-tint rounded-2xl tint-card">
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <div className="text-[13px] ">Dark PDF</div>
-                  <div className="text-[11px] opacity-55">
-                    The exact pages in this theme — keeps the book's own font
-                  </div>
-                </div>
+                <span className="flex-1 text-[10.5px] opacity-55">of {pageCount || '—'}</span>
                 <button
-                  className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-semibold text-accent-on transition-colors hover:bg-accent-hi disabled:opacity-50"
-                  disabled={!pageCount || exporting !== null}
-                  onClick={onExport}
-                >
-                  {exporting !== null ? `${Math.round(exporting * 100)}%` : 'Save'}
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <div className="text-[13px] ">
-                    Dark PDF, vector <span className="opacity-55">(beta)</span>
-                  </div>
-                  <div className="text-[11px] opacity-55">
-                    Same pages, selectable text, much smaller file
-                  </div>
-                </div>
-                <button
-                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-                  disabled={!pageCount || vexporting !== null}
-                  onClick={() => void onVectorExport()}
-                >
-                  {vexporting !== null ? `${Math.round(vexporting * 100)}%` : 'Save'}
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <div className="text-[13px] ">
-                    EPUB <span className="opacity-55">(beta)</span>
-                  </div>
-                  <div className="text-[11px] opacity-55">
-                    {epubErr
-                      ? 'Needs a text layer — scans need OCR'
-                      : 'The only format that takes your font, spacing and justify'}
-                  </div>
-                </div>
-                <button
-                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-                  disabled={!pageCount || epubbing !== null}
-                  onClick={() => void onEpubExport()}
-                >
-                  {epubbing !== null ? `${Math.round(epubbing * 100)}%` : 'Save'}
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <div className="text-[13px] ">Original pages</div>
-                  <div className="text-[11px] opacity-55">
-                    {extractErr
-                      ? 'Couldn’t extract from this PDF'
-                      : exportRange
-                        ? 'The untouched pages — share a chapter'
-                        : 'Pick a page range above to share a chapter'}
-                  </div>
-                </div>
-                <button
-                  className="rounded-full border border-accent/40 px-4 py-1.5 text-[13px] font-medium text-accent transition-colors hover:border-accent disabled:opacity-50"
-                  disabled={!pageCount || extracting || !exportRange}
+                  className="rounded-full border border-accent/50 px-3 py-1 text-[11px] font-medium text-accent disabled:opacity-50"
+                  disabled={!pageCount || extracting}
                   onClick={() => void onExtract()}
                 >
-                  {extracting ? '…' : 'Save'}
+                  {extracting ? '…' : 'Save originals'}
                 </button>
               </div>
-            </div>
-            
-
-            {cls && (
-              <div className="mt-6 text-center text-[11px] opacity-55">page: {cls.kind}</div>
             )}
+            <div className="grid grid-cols-4 gap-2">
+              <ExportChip icon="◒" label="Dark PDF" prog={exporting} disabled={!pageCount} onTap={onExport} />
+              <ExportChip
+                icon="◇"
+                label="Vector"
+                prog={vexporting}
+                disabled={!pageCount}
+                onTap={() => void onVectorExport()}
+              />
+              <ExportChip
+                icon="❧"
+                label="EPUB"
+                prog={epubbing}
+                disabled={!pageCount}
+                onTap={() => void onEpubExport()}
+              />
+              <button
+                role="switch"
+                aria-checked={exportRange}
+                aria-label="Export a page range"
+                className={`rounded-xl px-1 pb-2 pt-2.5 text-center text-[10.5px] transition-colors ${
+                  exportRange ? 'text-accent' : 'opacity-80'
+                }`}
+                style={{
+                  background: exportRange
+                    ? 'color-mix(in srgb, currentColor 15%, transparent)'
+                    : 'color-mix(in srgb, currentColor 7%, transparent)',
+                }}
+                onClick={() => setExportRange((r) => !r)}
+              >
+                <span className="mb-1 block text-[14px] leading-none opacity-85">⧉</span>
+                {exportRange ? 'Whole book' : 'Pages'}
+              </button>
+            </div>
           </div>
         </>
       )}
@@ -2966,35 +2860,3 @@ async function loadOutline(doc: PDFDocumentProxy): Promise<TocItem[]> {
 // iOS-style switch for the settings drawer. A native <button> keeps the
 // keyboard/AT semantics (role="switch", Space/Enter); the knob is warm-white
 // so it reads as a physical control on the dark panel.
-function IosToggle({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  label: string
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className={`relative h-7 w-12 flex-none rounded-full transition-colors duration-200 ${
-        checked ? 'bg-accent' : ''
-      }`}
-      style={
-        checked
-          ? undefined
-          : { background: 'color-mix(in srgb, currentColor 24%, transparent)' }
-      }
-      onClick={() => onChange(!checked)}
-    >
-      <span
-        className={`absolute left-0 top-0.5 h-6 w-6 rounded-full bg-ink-bright shadow transition-transform duration-200 ${
-          checked ? 'translate-x-[22px]' : 'translate-x-0.5'
-        }`}
-      />
-    </button>
-  )
-}
