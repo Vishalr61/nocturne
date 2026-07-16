@@ -54,6 +54,7 @@ import {
   saveProgress,
   logReading,
   saveThumb,
+  saveVocabWord,
   tintOf,
   touchBook,
   type Bookmark,
@@ -144,7 +145,10 @@ const POS_LABEL = {
 } as const
 
 /** The word under a screen point, from the caret position — no selection made. */
-function wordAtPoint(x: number, y: number): { word: string; rect: DOMRect } | null {
+function wordAtPoint(
+  x: number,
+  y: number,
+): { word: string; rect: DOMRect; sentence?: string } | null {
   type CaretDoc = Document & {
     caretRangeFromPoint?: (x: number, y: number) => Range | null
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
@@ -178,7 +182,19 @@ function wordAtPoint(x: number, y: number): { word: string; rect: DOMRect } | nu
   const range = document.createRange()
   range.setStart(node, a)
   range.setEnd(node, b)
-  return { word, rect: range.getBoundingClientRect() }
+  // The sentence around the word — the vocabulary notebook's context line.
+  let sa = a
+  let sb = b
+  while (sa > 0 && !/[.!?]/.test(text[sa - 1]) && a - sa < 160) sa--
+  while (sb < text.length && !/[.!?]/.test(text[sb])) {
+    sb++
+    if (sb - b > 200) break
+  }
+  const sentence = text
+    .slice(sa, Math.min(sb + 1, text.length))
+    .replace(/\s+/g, ' ')
+    .trim()
+  return { word, rect: range.getBoundingClientRect(), sentence: sentence || undefined }
 }
 
 /** A recolored page rendered to a 2D canvas, with its on-screen display size. */
@@ -385,6 +401,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     y: number
     /** Word near the top of the screen → the card opens below it, not above. */
     below: boolean
+    /** The sentence the word was tapped in — saved with the vocab entry. */
+    context?: string
+    /** Already in the notebook (or just saved from this card). */
+    saved: boolean
     res: 'loading' | 'none' | DictResult
   } | null>(null)
   /** Where a TOC/search/scrubber jump left from — the "↩ back" pill's target.
@@ -1550,6 +1570,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       x: hit.rect.left + hit.rect.width / 2,
       y: below ? hit.rect.bottom : hit.rect.top,
       below,
+      context: hit.sentence,
+      saved: false,
       res: 'loading',
     })
     void lookupWord(hit.word).then((res) => {
@@ -2346,14 +2368,41 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
             ) : (
               <>
-                <p className="border-b border-line/60 pb-2 font-serif text-[17px] text-ink-bright">
-                  {defCard.res.word}
-                  {defCard.word.toLowerCase() !== defCard.res.word && (
-                    <span className="ml-2 text-[12px] font-normal text-ink-faint">
-                      from “{defCard.word}”
-                    </span>
-                  )}
-                </p>
+                <div className="flex items-baseline gap-2 border-b border-line/60 pb-2">
+                  <p className="min-w-0 flex-1 truncate font-serif text-[17px] text-ink-bright">
+                    {defCard.res.word}
+                    {defCard.word.toLowerCase() !== defCard.res.word && (
+                      <span className="ml-2 text-[12px] font-normal text-ink-faint">
+                        from “{defCard.word}”
+                      </span>
+                    )}
+                  </p>
+                  <button
+                    className={`flex-none rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                      defCard.saved
+                        ? 'text-accent'
+                        : 'border border-accent/50 text-accent hover:border-accent'
+                    }`}
+                    disabled={defCard.saved}
+                    onClick={() => {
+                      const res = defCard.res
+                      if (typeof res === 'string') return
+                      const first = res.senses[0]
+                      void saveVocabWord({
+                        id: res.word,
+                        word: res.word,
+                        pos: POS_LABEL[first.pos],
+                        def: first.def,
+                        bookId: loadedIdRef.current ?? undefined,
+                        bookTitle: title || undefined,
+                        context: defCard.context,
+                      })
+                      setDefCard((c) => (c ? { ...c, saved: true } : c))
+                    }}
+                  >
+                    {defCard.saved ? '✓ Saved' : '＋ Save'}
+                  </button>
+                </div>
                 <ol className="mt-2.5 max-h-[44vh] space-y-3 overflow-y-auto">
                   {defCard.res.senses.slice(0, 8).map((s, i) => (
                     <li key={i} className="text-[13px] leading-snug text-ink-body">

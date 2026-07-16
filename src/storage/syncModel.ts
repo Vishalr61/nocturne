@@ -5,6 +5,7 @@ import {
   allProfiles,
   allProgressRows,
   allTombstones,
+  allVocab,
   applyDeleteBook,
   bookmarkId,
   db,
@@ -13,6 +14,7 @@ import {
   natHighlight,
   natProfile,
   natProgress,
+  natVocab,
   upsertKnownBook,
 } from './db'
 
@@ -32,12 +34,13 @@ export interface LocalRecord {
 
 /** Everything changed since `sinceHigh` (updatedAt high-water mark), for push. */
 export async function collectLocal(sinceHigh: number): Promise<LocalRecord[]> {
-  const [books, profiles, progress, bookmarks, highlights, tombstones] = await Promise.all([
+  const [books, profiles, progress, bookmarks, highlights, vocab, tombstones] = await Promise.all([
     allBooks(),
     allProfiles(),
     allProgressRows(),
     allBookmarks(),
     allHighlights(),
+    allVocab(),
     allTombstones(),
   ])
   const out: LocalRecord[] = []
@@ -65,7 +68,7 @@ export async function collectLocal(sinceHigh: number): Promise<LocalRecord[]> {
         naturalKey: natProgress(p.bookId),
         updatedAt: p.updatedAt,
         deleted: false,
-        body: { t: 'progress', bookId: p.bookId, page: p.page, percent: p.percent, offset: p.offset },
+        body: { t: 'progress', bookId: p.bookId, page: p.page, percent: p.percent, offset: p.offset, finished: p.finished ?? false },
       })
     }
   }
@@ -96,6 +99,28 @@ export async function collectLocal(sinceHigh: number): Promise<LocalRecord[]> {
           end: h.end,
           text: h.text,
           createdAt: h.createdAt,
+        },
+      })
+    }
+  }
+  for (const v of vocab) {
+    const u = v.updatedAt ?? v.savedAt
+    if (u > sinceHigh) {
+      out.push({
+        naturalKey: natVocab(v.id),
+        updatedAt: u,
+        deleted: false,
+        body: {
+          t: 'vocab',
+          id: v.id,
+          word: v.word,
+          pos: v.pos,
+          def: v.def,
+          note: v.note ?? null,
+          bookId: v.bookId ?? null,
+          bookTitle: v.bookTitle ?? null,
+          context: v.context ?? null,
+          savedAt: v.savedAt,
         },
       })
     }
@@ -174,6 +199,28 @@ export async function applyRemote(body: Record<string, unknown>): Promise<number
           page: Number(body.page) || 1,
           percent: Number(body.percent) || 0,
           offset: typeof body.offset === 'number' ? body.offset : undefined,
+          finished: body.finished === true || undefined,
+          updatedAt,
+        })
+      }
+      return updatedAt
+    }
+    case 'vocab': {
+      const id = String(body.id)
+      const local = await db.vocab.get(id)
+      if (deleted) {
+        if (local && wins(updatedAt, local.updatedAt ?? local.savedAt)) await db.vocab.delete(id)
+      } else if (wins(updatedAt, local?.updatedAt ?? local?.savedAt)) {
+        await db.vocab.put({
+          id,
+          word: String(body.word ?? id),
+          pos: String(body.pos ?? ''),
+          def: String(body.def ?? ''),
+          note: typeof body.note === 'string' ? body.note : undefined,
+          bookId: typeof body.bookId === 'string' ? body.bookId : undefined,
+          bookTitle: typeof body.bookTitle === 'string' ? body.bookTitle : undefined,
+          context: typeof body.context === 'string' ? body.context : undefined,
+          savedAt: Number(body.savedAt) || updatedAt,
           updatedAt,
         })
       }
