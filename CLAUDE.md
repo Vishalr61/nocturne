@@ -145,15 +145,15 @@ src/
    Resume is the one-tap continue.)
 5. ✅ Search (in-book streaming + highlights, library filter), bookmarks,
    rename/derived titles, library backup & restore.
-6. 🟡 **Sync reading state** (not bytes) — built + verified, awaiting a
-   `workers.dev` subdomain to go live. Positions/themes/titles/bookmarks/
-   highlights sync end-to-end encrypted; a "ghost shelf" lists books whose PDF
-   isn't on this device; content-hash ids make re-adding from Files resume
-   exactly. PDFs never leave the device. Worker + D1 in `sync-worker/` (deployed,
-   pending subdomain); client in `storage/sync*.ts`. Set `DEFAULT_SYNC_URL` in
-   `storage/syncClient.ts` once the subdomain exists (`syncConfigured()` gates
-   the UI until then). Merge is per-record last-write-wins keyed by `updatedAt`;
-   deletes propagate as tombstones.
+6. ✅ **Sync reading state** (not bytes) — LIVE at
+   `nocturne-sync.vishalr0012.workers.dev` (2026-07-16), proven end-to-end
+   against production by `scripts/verify/verify_sync_e2e.py`. Positions/
+   themes/titles/bookmarks/highlights/finished sync end-to-end encrypted; a
+   "ghost shelf" lists books whose PDF isn't on this device; content-hash ids
+   make re-adding from Files resume exactly. PDFs never leave the device.
+   Worker + D1 in `sync-worker/`; client in `storage/sync*.ts`. Merge is
+   per-record last-write-wins keyed by `updatedAt`; deletes propagate as
+   tombstones.
 7. ✅ Selectable text layer (`reader/TextLayer.tsx`) → passage highlights,
    copy. Off by default ("T" toggles select mode) so taps still turn pages.
    Highlights persist as character RANGES, never pixel rects, so they survive

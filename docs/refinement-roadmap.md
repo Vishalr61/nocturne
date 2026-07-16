@@ -152,11 +152,14 @@ payoffs: scans get Text Mode, read aloud, and search. Gate it behind an
 explicit per-book "Recognize text" action (it's slow and battery-hungry;
 never automatic).
 
-## 7. Sync go-live (P1, blocked on the workers.dev subdomain)
+## 7. Sync go-live ✅ (2026-07-16)
 
-Built and verified end-to-end; flip `DEFAULT_SYNC_URL` when the subdomain
-exists. Reading on Mac + iPhone daily makes this the highest-leverage
-blocked item — positions and highlights should follow you.
+Live at `nocturne-sync.vishalr0012.workers.dev` (Cloudflare Worker + D1,
+ciphertext only). Proven end-to-end against production by
+`scripts/verify/verify_sync_e2e.py`: device A enables sync at page 42,
+device B adopts the secret, the book appears as a ghost, re-adding the PDF
+resumes at page 42. Positions, looks, titles, bookmarks, highlights, and
+finished flags follow you; PDFs never leave the device.
 
 ## 8. Small finish work (P2, batched when touching the area)
 
