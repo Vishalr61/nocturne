@@ -321,12 +321,9 @@ export function Shelf({ onOpen }: ShelfProps) {
       )}
       <header className="safe-top sticky top-0 z-20 border-b border-white/[0.06] bg-[#1c1610]/70 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
-          {/* The crescent — the mark. Two circles, the night eats the second. */}
-          <svg viewBox="0 0 32 32" className="h-[30px] w-[30px] flex-none" aria-hidden>
-            <path
-              d="M21 4a13 13 0 1 0 6.5 17.5A11 11 0 0 1 21 4z"
-              fill="url(#moongrad)"
-            />
+          {/* The crescent — the mark (the original favicon's slim moon, in gold). */}
+          <svg viewBox="0 0 64 64" className="h-[30px] w-[30px] flex-none" aria-hidden>
+            <path d="M40 20a16 16 0 1 0 8 22 13 13 0 0 1-8-22z" fill="url(#moongrad)" />
             <defs>
               <linearGradient id="moongrad" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0" stopColor="#e8cc96" />

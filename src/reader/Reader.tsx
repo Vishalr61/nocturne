@@ -2212,7 +2212,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           />
           {/* Phone: a Books-style bottom sheet that takes only the height it
               needs. Desktop (sm+): the familiar right-side panel. */}
-          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[76dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:safe-top sm:inset-y-0 sm:bottom-auto sm:left-auto sm:right-0 sm:max-h-none sm:w-[400px] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-10 sm:shadow-[-12px_0_48px_rgba(0,0,0,0.4)]">
+          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[76dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:safe-top sm:top-0 sm:left-auto sm:right-0 sm:max-h-none sm:w-[400px] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-10 sm:shadow-[-12px_0_48px_rgba(0,0,0,0.4)]">
             <div className="mb-6 flex items-center justify-between">
               <div className="font-serif text-xl text-ink-bright">Reading settings</div>
               <button
