@@ -33,6 +33,7 @@ import {
   syncNow,
 } from '../storage/syncClient'
 import { importBook } from './import'
+import { loadPace, timeLeft, paceReady } from '../engine/pace'
 
 /** Chromium's beforeinstallprompt event (not in the TS DOM lib). */
 interface InstallPromptEvent extends Event {
@@ -297,7 +298,11 @@ export function Shelf({ onOpen }: ShelfProps) {
     const p = progress[b.id]
     if (p?.finished) return 'Finished'
     if (!p) return 'Not started'
-    return `${Math.round(p.percent * 100)}% · p. ${p.page} of ${b.pageCount}`
+    const unit = b.format === 'epub' ? 'ch.' : 'p.'
+    const base = `${Math.round(p.percent * 100)}% · ${unit} ${p.page} of ${b.pageCount}`
+    const pace = loadPace(b.id)
+    const left = paceReady(pace) ? timeLeft(pace, Math.max(0, 100 - p.percent * 100)) : null
+    return left ? `${base} · ~${left} left` : base
   }
 
   const toggleFinished = useCallback(
