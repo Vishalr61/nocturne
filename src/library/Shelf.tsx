@@ -13,6 +13,7 @@ import {
   readingStats,
   renameBook,
   requestPersistentStorage,
+  setBookFinished,
   storageEstimate,
   type Book,
   type KnownBook,
@@ -281,9 +282,18 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   const meta = (b: Book) => {
     const p = progress[b.id]
+    if (p?.finished) return 'Finished'
     if (!p) return 'Not started'
     return `${Math.round(p.percent * 100)}% · p. ${p.page} of ${b.pageCount}`
   }
+
+  const toggleFinished = useCallback(
+    async (b: Book) => {
+      await setBookFinished(b.id, !progress[b.id]?.finished)
+      await refresh()
+    },
+    [progress, refresh],
+  )
 
   return (
     <div
@@ -311,13 +321,19 @@ export function Shelf({ onOpen }: ShelfProps) {
       )}
       <header className="safe-top sticky top-0 z-20 border-b border-white/[0.06] bg-[#1c1610]/70 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-[1180px] items-center gap-4 px-5 py-4 sm:px-8">
-          <div
-            className="h-[30px] w-[30px] flex-none rounded-[9px]"
-            style={{
-              background:
-                'radial-gradient(120% 120% at 30% 20%,rgb(var(--accent-hi-rgb)),rgb(var(--accent-rgb) / 0.55))',
-            }}
-          />
+          {/* The crescent — the mark. Two circles, the night eats the second. */}
+          <svg viewBox="0 0 32 32" className="h-[30px] w-[30px] flex-none" aria-hidden>
+            <path
+              d="M21 4a13 13 0 1 0 6.5 17.5A11 11 0 0 1 21 4z"
+              fill="url(#moongrad)"
+            />
+            <defs>
+              <linearGradient id="moongrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#e8cc96" />
+                <stop offset="1" stopColor="#c9a56a" />
+              </linearGradient>
+            </defs>
+          </svg>
           <h1 className="font-serif text-xl font-semibold tracking-tight text-ink-bright">
             Nocturne
           </h1>
@@ -409,18 +425,37 @@ export function Shelf({ onOpen }: ShelfProps) {
             )}
 
             {stats && stats.weekMin > 0 && (
-              <div className="mt-10 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded-2xl border border-line bg-inset/60 px-5 py-3.5 text-[13px] text-ink-mid">
-                <span className="font-serif text-[15px] text-ink-head">Your reading</span>
-                <span>
-                  {stats.todayMin} min today
-                  {stats.todayPages > 0 ? ` · ${stats.todayPages} pages` : ''}
-                </span>
-                <span>
-                  {stats.weekMin >= 90
-                    ? `${Math.floor(stats.weekMin / 60)} h ${stats.weekMin % 60} min this week`
-                    : `${stats.weekMin} min this week`}
-                </span>
-                {stats.streak > 1 && <span className="text-accent">{stats.streak}-day streak</span>}
+              <div className="mx-auto mt-9 grid max-w-lg grid-cols-4 gap-2">
+                {[
+                  { n: String(stats.todayMin), u: 'min', k: 'today' },
+                  {
+                    n:
+                      stats.weekMin >= 90
+                        ? `${Math.floor(stats.weekMin / 60)}h ${stats.weekMin % 60}`
+                        : String(stats.weekMin),
+                    u: stats.weekMin >= 90 ? 'min' : 'min',
+                    k: 'this week',
+                  },
+                  { n: String(stats.streak), u: stats.streak === 1 ? 'day' : 'days', k: 'streak' },
+                  {
+                    n: String(Object.values(progress).filter((p) => p.finished).length),
+                    u: '',
+                    k: 'finished',
+                  },
+                ].map((t) => (
+                  <div
+                    key={t.k}
+                    className="rounded-xl border border-white/[0.06] bg-white/[0.04] px-2 py-3 text-center backdrop-blur-sm"
+                  >
+                    <div className="font-serif text-[19px] leading-none text-ink-head">
+                      {t.n}
+                      {t.u && <span className="ml-1 text-[11px] text-ink-dim">{t.u}</span>}
+                    </div>
+                    <div className="mt-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+                      {t.k}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -497,7 +532,10 @@ export function Shelf({ onOpen }: ShelfProps) {
                         )}
                         {/* progress strip along the cover's bottom edge */}
                         <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/30">
-                          <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+                          <div
+                            className="h-full bg-accent"
+                            style={{ width: `${p?.finished ? 100 : pct}%` }}
+                          />
                         </div>
                       </div>
                     </button>
@@ -526,7 +564,9 @@ export function Shelf({ onOpen }: ShelfProps) {
                     )}
 
                     <div className="mt-1 flex items-baseline justify-between text-xs tabular-nums text-ink-dim">
-                      <span className="truncate">{p ? `${pct}% · p. ${p.page}` : 'Not started'}</span>
+                      <span className={`truncate ${p?.finished ? 'text-accent' : ''}`}>
+                        {p?.finished ? '✓ Finished' : p ? `${pct}% · p. ${p.page}` : 'Not started'}
+                      </span>
                       <span className="ml-2 flex-none">
                         {fmtBytes(b.size)}
                         {p ? ` · ${relTime(p.updatedAt)}` : ''}
@@ -534,6 +574,15 @@ export function Shelf({ onOpen }: ShelfProps) {
                     </div>
 
                     <div className="absolute right-2 top-2 flex gap-1.5">
+                      <button
+                        aria-label={p?.finished ? `Mark ${b.title} unfinished` : `Mark ${b.title} finished`}
+                        className={`rounded-full bg-black/60 px-2 py-0.5 text-xs transition-opacity hover:opacity-100 ${
+                          p?.finished ? 'text-accent opacity-100' : 'text-ink-body opacity-60'
+                        }`}
+                        onClick={() => void toggleFinished(b)}
+                      >
+                        ✓
+                      </button>
                       <button
                         aria-label={`Rename ${b.title}`}
                         className="rounded-full bg-black/60 px-2 py-0.5 text-xs text-ink-body opacity-60 transition-opacity hover:opacity-100"
@@ -616,12 +665,9 @@ export function Shelf({ onOpen }: ShelfProps) {
               else setShowInstallHelp((s) => !s)
             }}
           >
-            <span className="text-[14px] font-semibold text-accent">
-              Install Nocturne on this device
-            </span>
+            <span className="text-[14px] font-semibold text-accent">Install Nocturne</span>
             <span className="mt-0.5 block text-xs leading-relaxed text-ink-dim">
-              An installed app is exempt from the browser's storage cleanup — your books and
-              progress stay put even if you don't open it for weeks.
+              Keeps your library safe from browser cleanup.
             </span>
           </button>
           {showInstallHelp && (

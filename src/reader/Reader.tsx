@@ -86,24 +86,34 @@ function DrawerSection({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="mb-3 rounded-2xl bg-night-800/40">
+    <div
+      className={`mb-3 overflow-hidden rounded-2xl border transition-colors ${
+        open ? 'border-accent/25 bg-night-800/60' : 'border-line/60 bg-night-800/25'
+      }`}
+    >
       <button
         type="button"
         aria-expanded={open}
         className="flex w-full items-center justify-between px-4 py-3.5 text-left"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="text-[13px] font-semibold text-ink-body">
-          {title}
-          {hint && <span className="ml-2 font-normal text-ink-faint">{hint}</span>}
+        <span className="flex items-baseline gap-2">
+          <span
+            className={`text-[12px] font-semibold uppercase tracking-[0.1em] ${
+              open ? 'text-accent' : 'text-ink-body'
+            }`}
+          >
+            {title}
+          </span>
+          {hint && !open && <span className="text-[12px] text-ink-faint">{hint}</span>}
         </span>
         <span
-          className={`text-ink-faint transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+          className={`text-[15px] text-ink-faint transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
         >
           ›
         </span>
       </button>
-      {open && <div className="px-3 pb-3">{children}</div>}
+      {open && <div className="border-t border-line/50 px-3 pb-3 pt-3">{children}</div>}
     </div>
   )
 }
@@ -301,7 +311,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // Comfort settings are device/environment preferences, not per-book, so they
   // live in localStorage (and don't sync).
   const [dim, setDim] = useState(() => comfortNum('nocturne-dim', 0))
-  const [haptics, setHaptics] = useState(() => comfortBool('nocturne-haptics', true))
   const [cls, setCls] = useState<PageClassification | null>(null)
   const [exporting, setExporting] = useState<number | null>(null) // 0..1 progress
   /** A finished export parked for a fresh tap to open the iOS share sheet. */
@@ -360,7 +369,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     below: boolean
     res: 'loading' | 'none' | DictResult
   } | null>(null)
-  const [dblTapDefine, setDblTapDefine] = useState(() => comfortBool('nocturne-dbltap-define', true))
   /** Where a TOC/search/scrubber jump left from — the "↩ back" pill's target.
    *  Chained jumps keep the ORIGINAL origin; that's the place you left. */
   const [backSpot, setBackSpot] = useState<number | null>(null)
@@ -949,8 +957,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   // A faint tick on page turn. iOS Safari doesn't expose the Vibration API, so
   // this is silent on iPhone and fires on Android/desktop Chrome.
   const tick = useCallback(() => {
-    if (haptics && typeof navigator.vibrate === 'function') navigator.vibrate(8)
-  }, [haptics])
+    if (typeof navigator.vibrate === 'function') navigator.vibrate(8)
+  }, [])
 
   const turn = useCallback(
     (delta: number) => {
@@ -967,7 +975,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   useEffect(() => {
     try {
       localStorage.setItem('nocturne-dim', String(dim))
-      localStorage.setItem('nocturne-haptics', haptics ? '1' : '0')
       localStorage.setItem('nocturne-textsize', String(textSize))
       localStorage.setItem('nocturne-textleading', String(textLeading))
       localStorage.setItem('nocturne-textfont', textFontId)
@@ -975,11 +982,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
       localStorage.setItem('nocturne-footerstat', footerStat)
-      localStorage.setItem('nocturne-dbltap-define', dblTapDefine ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, haptics, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat, dblTapDefine])
+  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat])
 
   // Reading stats: time is the gap between page arrivals (capped, so a
   // put-down phone doesn't count the night), pages are forward movement
@@ -1486,7 +1492,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [])
 
   useEffect(() => {
-    if (!dblTapDefine) return
     const isReaderText = (t: EventTarget | null) =>
       t instanceof Element &&
       !!t.closest('[data-text-layer] span[data-s], [data-textreader] p, [data-textreader] h2')
@@ -1521,7 +1526,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       document.removeEventListener('dblclick', onDblClick)
       document.removeEventListener('touchend', onTouchEnd)
     }
-  }, [dblTapDefine, defineAt])
+  }, [defineAt])
 
   // The card dismisses on the next tap anywhere outside it.
   useEffect(() => {
@@ -1804,22 +1809,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             >
               {marked ? '★' : '☆'}
             </button>
-            {viewMode === 'paged' && !spreadActive && (cls?.textChars ?? 0) > 0 && (
-              <button
-                aria-label={selectMode ? 'Leave select mode' : 'Select text'}
-                title="Select text to copy or highlight"
-                className={`px-3.5 py-2 font-serif transition-opacity hover:opacity-100 ${
-                  selectMode ? 'text-accent opacity-100' : 'opacity-75'
-                }`}
-                style={{ borderLeft: `1px solid ${hairline}` }}
-                onClick={() => {
-                  setSelection(null)
-                  setSelectMode((s) => !s)
-                }}
-              >
-                T
-              </button>
-            )}
             <button
               aria-label="Search in book"
               className="px-3.5 py-2 opacity-75 transition-opacity hover:opacity-100"
@@ -1855,7 +1844,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           initialOffset={scrollOff}
           onOffset={setScrollOff}
           onToggleChrome={() => setChrome((c) => !c)}
-          chromeVisible={chrome}
           textCache={textCacheRef.current}
           highlights={marks}
           onSelect={onFlowSelect}
@@ -1882,7 +1870,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           onPage={setPage}
           onFontSize={setTextSize}
           onToggleChrome={() => setChrome((c) => !c)}
-          chromeVisible={chrome}
         />
       )}
 
@@ -2463,51 +2450,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </DrawerSection>
             )}
 
-            {/* Comfort: device/environment preferences, not per-book. */}
-            <DrawerSection title="Comfort" hint="dimmer · dictionary · haptics">
-              <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
-              <div className="px-4 py-3">
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="text-[13px] text-ink-body">Night dimmer</span>
-                  <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
-                </div>
-                <input
-                  aria-label="Night dimmer"
-                  type="range"
-                  min={0}
-                  max={0.75}
-                  step={0.05}
-                  value={dim}
-                  onChange={(e) => setDim(Number(e.target.value))}
-                  className="cozy-range w-full"
-                  style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
-                />
+            {/* Night dimmer: the one comfort control left — goes below the
+                phone's minimum brightness, and doubles as image brightness. */}
+            <div className="mb-3 rounded-2xl bg-night-800/40 px-4 py-3">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[13px] text-ink-body">Night dimmer</span>
+                <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
               </div>
-              <div className="flex items-center justify-between px-4 py-3">
-                <span className="text-[13px] text-ink-body">
-                  Double-tap defines a word <span className="text-ink-faint">(dictionary)</span>
-                </span>
-                <IosToggle
-                  checked={dblTapDefine}
-                  onChange={setDblTapDefine}
-                  label="Double-tap defines a word"
-                />
-              </div>
-              {/* iOS Safari has no Vibration API — a toggle that can't do
-                  anything shouldn't exist there. */}
-              {'vibrate' in navigator && (
-                <div className="flex items-center justify-between px-4 py-3">
-                  <span className="text-[13px] text-ink-body">
-                    Haptic page turns <span className="text-ink-faint">(a tiny buzz)</span>
-                  </span>
-                  <IosToggle checked={haptics} onChange={setHaptics} label="Haptics" />
-                </div>
-              )}
-              </div>
-              <p className="mt-2 px-1 text-xs leading-relaxed text-ink-faint">
-                The dimmer goes below the phone's minimum brightness for dark rooms.
-              </p>
-            </DrawerSection>
+              <input
+                aria-label="Night dimmer"
+                type="range"
+                min={0}
+                max={0.75}
+                step={0.05}
+                value={dim}
+                onChange={(e) => setDim(Number(e.target.value))}
+                className="cozy-range w-full"
+                style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
+              />
+            </div>
 
             {'speechSynthesis' in window && (
               <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/40 px-4 py-3">

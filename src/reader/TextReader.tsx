@@ -59,8 +59,6 @@ interface TextReaderProps {
   /** Pinch in Text Mode resizes the text (reflowing) rather than zooming the page. */
   onFontSize: (px: number) => void
   onToggleChrome: () => void
-  /** Taps on prose may HIDE visible chrome, but never summon it. */
-  chromeVisible?: boolean
 }
 
 // A page renders either as reflowed text (prose) or as its recolored image
@@ -94,7 +92,6 @@ export function TextReader({
   onPage,
   onFontSize,
   onToggleChrome,
-  chromeVisible,
 }: TextReaderProps) {
   const fontPxRef = useRef(fontPx)
   fontPxRef.current = fontPx
@@ -469,13 +466,11 @@ export function TextReader({
       data-textreader
       className="relative flex-1 overflow-y-auto overflow-x-hidden"
       style={{ background: bg, color: fg }}
-      onClick={(e) => {
-        // The click that ends a text selection must not toggle the chrome.
-        // A click on prose hides visible chrome (any tap dismisses) but never
-        // summons it; the margins are the summon surface.
+      onClick={() => {
+        // One tap anywhere toggles the chrome, both directions; the click that
+        // ends a text selection is the one exception.
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
-        if (!chromeVisible && e.target instanceof Element && e.target.closest('p, h2')) return
         onToggleChrome()
       }}
     >

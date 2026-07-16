@@ -98,7 +98,11 @@ export function finishDarkPage(
   recolor: Recolorizer,
   opts: DarkPageOptions,
 ): DarkPageResult {
-  const inkFlip = dominantLuma(source) >= DARK_PAGE_LUMA
+  // The Original theme is the PDF exactly as published: the shader's strength
+  // uniform mixes back to the source, so every pixel passes through untouched.
+  // The mask/polarity analysis is skipped — nothing downstream would use it.
+  const original = opts.theme.id === 'original'
+  const inkFlip = !original && dominantLuma(source) >= DARK_PAGE_LUMA
   const colorText = cls.kind === 'digital-text' && cls.imageRects.length === 0
 
   let mask: HTMLCanvasElement | null = null
@@ -116,7 +120,7 @@ export function finishDarkPage(
   recolor.render(source, source.width, source.height, {
     theme: opts.theme,
     satCut: opts.satCut,
-    strength: opts.strength,
+    strength: original ? 0 : opts.strength,
     inkFlip,
     colorText,
     mask,

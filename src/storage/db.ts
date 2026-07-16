@@ -47,6 +47,9 @@ export interface Progress {
   /** Scroll mode's exact strip position, in page units (scrollTop/slotHeight).
    *  Restores the very line you left, not just the page top. */
   offset?: number
+  /** Marked done by the reader — independent of percent (a book is finished
+   *  when they say so, not when a scrollbar does). Rides along with sync. */
+  finished?: boolean
   updatedAt: number
 }
 
@@ -404,11 +407,31 @@ export async function getProfile(bookId: string): Promise<Profile | undefined> {
 }
 
 export async function saveProgress(p: Progress): Promise<void> {
+  // `finished` is owned by the shelf action, not the reading loop — a put
+  // would silently drop it on the next page turn, so carry it forward.
+  if (p.finished === undefined) {
+    const cur = await db.progress.get(p.bookId)
+    if (cur?.finished) p = { ...p, finished: true }
+  }
   await db.progress.put(p)
 }
 
 export async function getProgress(bookId: string): Promise<Progress | undefined> {
   return db.progress.get(bookId)
+}
+
+/** Mark a book finished (or un-finish it). Creates a progress row if the book
+ *  was never opened; bumps updatedAt so sync carries it. */
+export async function setBookFinished(bookId: string, finished: boolean): Promise<void> {
+  const cur = await db.progress.get(bookId)
+  await db.progress.put({
+    bookId,
+    page: cur?.page ?? 1,
+    percent: finished ? 1 : (cur?.percent ?? 0),
+    offset: cur?.offset,
+    finished,
+    updatedAt: Date.now(),
+  })
 }
 
 export interface ProgressByBook {
