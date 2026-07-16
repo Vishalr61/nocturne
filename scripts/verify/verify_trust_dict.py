@@ -29,7 +29,7 @@ def load_book(ctx, book):
 
 def text_mode(page):
     page.locator("button[aria-label='Reading settings']").click()
-    page.wait_for_selector("text=Reading settings", timeout=5000)
+    page.wait_for_selector("button:has-text('Customise')", timeout=5000)
     page.locator("button:has-text('text')").last.click()
     time.sleep(0.5)
     page.locator("button[aria-label='Close settings']").click()

@@ -330,6 +330,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [epubErr, setEpubErr] = useState(false)
   const [toc, setToc] = useState<TocItem[]>([])
   const [showToc, setShowToc] = useState(false)
+  /** The Aa popover: size stepper, dimmer, layout, themes — the daily knobs. */
+  const [showQuick, setShowQuick] = useState(false)
+  /** The Customise sheet: type, page, exports — everything else. */
   const [showSettings, setShowSettings] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [query, setQuery] = useState('')
@@ -1072,9 +1075,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const hideTimer = useRef<number | undefined>(undefined)
   const bumpChrome = useCallback(() => {
     window.clearTimeout(hideTimer.current)
-    if (!chrome || showSettings || showSearch || showToc || selectMode) return
+    if (!chrome || showSettings || showQuick || showSearch || showToc || selectMode) return
     hideTimer.current = window.setTimeout(() => setChrome(false), 4000)
-  }, [chrome, showSettings, showSearch, showToc, selectMode])
+  }, [chrome, showSettings, showQuick, showSearch, showToc, selectMode])
 
   useEffect(() => {
     bumpChrome()
@@ -1253,6 +1256,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       // the arrow keys are the ones that must not hijack typing.
       if (e.key === 'Escape') {
         if (showSearch) setShowSearch(false)
+        else if (showQuick) setShowQuick(false)
         else if (showSettings) setShowSettings(false)
         else if (showToc) setShowToc(false)
         else if (selectMode) {
@@ -1747,15 +1751,23 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const theme = themeById(themeId)
   const chromeBg = rgbCss(theme.bg)
   const hairline = 'color-mix(in srgb, currentColor 14%, transparent)'
-  // Floating chrome: glass pills over the page instead of bars that reflow it.
-  // Derived from the theme ground so Paper gets light glass, night themes dark.
+  // The footer's ghost capsule: borderless, barely-there glass so the scrubber
+  // stays legible over any page without reading as a box (design A).
   const pill: React.CSSProperties = {
-    background: `color-mix(in srgb, ${chromeBg} 78%, transparent)`,
-    border: `1px solid ${hairline}`,
-    backdropFilter: 'blur(12px)',
-    WebkitBackdropFilter: 'blur(12px)',
-    boxShadow: '0 10px 28px -14px rgba(0,0,0,0.55)',
+    background: `color-mix(in srgb, ${chromeBg} 62%, transparent)`,
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
   }
+
+  // The Aa popover's stepper: Books' size control, mapped to what "size"
+  // means in the current view — font size when reflowing, zoom otherwise.
+  const stepSize = useCallback(
+    (dir: 1 | -1) => {
+      if (viewMode === 'text') setTextSize((s) => Math.max(14, Math.min(30, s + dir)))
+      else setZoom((z) => Math.max(1, Math.min(4, Math.round((z + dir * 0.25) * 4) / 4)))
+    },
+    [viewMode],
+  )
   const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
 
   // Pages left in the current chapter: distance to the next outline
@@ -1785,25 +1797,25 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           style={{ opacity: dim }}
         />
       )}
-      {/* Floating chrome (design B): glass pills over the page, so showing or
-          hiding them never reflows the reading surface. */}
+      {/* Quiet chrome (design A, Books-style): bare marks sitting directly on
+          the page — no glass, no boxes. Overlay, so toggling never reflows. */}
       {chrome && (
-        <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-[24] mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-3 pt-3 text-sm">
+        <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-[24] mx-auto flex w-full max-w-3xl items-center gap-4 px-4 pt-2 text-sm">
           <button
-            className="pointer-events-auto whitespace-nowrap rounded-full px-4 py-2 opacity-90 transition-opacity hover:opacity-100"
-            style={pill}
+            aria-label="Back to library"
+            className="pointer-events-auto px-2 py-1.5 text-[17px] opacity-60 transition-opacity hover:opacity-100"
             onClick={onShelf}
           >
-            ‹ Library
+            ‹
           </button>
-          <div
-            className="pointer-events-auto flex items-center overflow-hidden rounded-full"
-            style={pill}
-          >
+          <div className="min-w-0 flex-1 text-center">
+            <span className="block truncate font-serif text-xs italic opacity-45">{title}</span>
+          </div>
+          <div className="pointer-events-auto flex items-center gap-1">
             <button
               aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
-              className={`px-3.5 py-2 transition-opacity hover:opacity-100 ${
-                marked ? 'text-accent opacity-100' : 'opacity-75'
+              className={`px-2 py-1.5 transition-opacity hover:opacity-100 ${
+                marked ? 'text-accent opacity-100' : 'opacity-60'
               }`}
               onClick={() => void toggleBookmark()}
             >
@@ -1811,22 +1823,131 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             </button>
             <button
               aria-label="Search in book"
-              className="px-3.5 py-2 opacity-75 transition-opacity hover:opacity-100"
-              style={{ borderLeft: `1px solid ${hairline}` }}
+              className="px-2 py-1.5 opacity-60 transition-opacity hover:opacity-100"
               onClick={() => setShowSearch(true)}
             >
               ⌕
             </button>
             <button
               aria-label="Reading settings"
-              className="px-4 py-2 font-serif opacity-75 transition-opacity hover:opacity-100"
-              style={{ borderLeft: `1px solid ${hairline}` }}
-              onClick={() => setShowSettings(true)}
+              className="px-2 py-1.5 font-serif opacity-60 transition-opacity hover:opacity-100"
+              onClick={() => setShowQuick(true)}
             >
               Aa
             </button>
           </div>
         </div>
+      )}
+
+      {/* The Aa popover: the daily knobs, anchored under the button (Books
+          model). Everything else lives behind Customise. */}
+      {showQuick && (
+        <>
+          <button
+            aria-label="Close settings"
+            className="fixed inset-0 z-30 cursor-default"
+            onClick={() => setShowQuick(false)}
+          />
+          <div className="safe-top pointer-events-none absolute inset-x-0 top-0 z-40 mx-auto w-full max-w-3xl px-3">
+            <div
+              className="anim-fade pointer-events-auto ml-auto mt-10 w-[278px] rounded-2xl p-3.5"
+              style={{
+                background: `color-mix(in srgb, ${chromeBg} 90%, ${rgbCss(theme.fg)} 5%)`,
+                border: `1px solid ${hairline}`,
+                boxShadow: '0 24px 48px -16px rgba(0,0,0,0.5)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+              }}
+            >
+              <div className="mb-3 flex gap-2">
+                <div
+                  className="flex flex-1 overflow-hidden rounded-xl"
+                  style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+                >
+                  <button
+                    aria-label={viewMode === 'text' ? 'Smaller text' : 'Zoom out'}
+                    className="flex-1 py-2 font-serif text-[12px] opacity-80 hover:opacity-100"
+                    style={{ borderRight: `1px solid ${hairline}` }}
+                    onClick={() => stepSize(-1)}
+                  >
+                    A
+                  </button>
+                  <button
+                    aria-label={viewMode === 'text' ? 'Larger text' : 'Zoom in'}
+                    className="flex-1 py-2 font-serif text-[17px] leading-none opacity-80 hover:opacity-100"
+                    onClick={() => stepSize(1)}
+                  >
+                    A
+                  </button>
+                </div>
+                <button
+                  aria-label="Night dimmer"
+                  className={`w-12 rounded-xl py-2 ${dim > 0 ? 'text-accent' : 'opacity-80'}`}
+                  style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+                  onClick={() => setDim((d) => (d >= 0.4 ? 0 : d >= 0.2 ? 0.4 : 0.2))}
+                >
+                  ◐
+                </button>
+              </div>
+
+              <div
+                className="mb-3 flex rounded-xl p-0.5"
+                style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+              >
+                {(['paged', 'scroll', 'text'] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={`flex-1 rounded-[10px] py-1.5 text-[12px] font-semibold capitalize ${
+                      viewMode === m ? 'bg-accent text-accent-on' : 'opacity-70'
+                    }`}
+                    onClick={() => setViewMode(m)}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+
+              {/* Every theme, one strip, scrolls right. */}
+              <div className="-mx-1 mb-3 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    aria-label={`${t.name} theme`}
+                    className={`w-[72px] flex-none snap-start rounded-xl border-2 px-1 pb-1.5 pt-2 text-center ${
+                      t.id === themeId ? 'border-accent' : 'border-transparent'
+                    }`}
+                    style={{
+                      background: rgbCss(t.bg),
+                      boxShadow: t.id === themeId ? undefined : `inset 0 0 0 1px ${hairline}`,
+                    }}
+                    onClick={() => setThemeId(t.id)}
+                  >
+                    <span className="block font-serif text-[16px]" style={{ color: rgbCss(t.fg) }}>
+                      Aa
+                    </span>
+                    <span
+                      className="block truncate text-[9.5px]"
+                      style={{ color: rgbCss(t.fg), opacity: 0.7 }}
+                    >
+                      {t.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <button
+                className="w-full rounded-xl py-2 text-[12.5px] font-semibold opacity-85 hover:opacity-100"
+                style={{ background: 'color-mix(in srgb, currentColor 9%, transparent)' }}
+                onClick={() => {
+                  setShowQuick(false)
+                  setShowSettings(true)
+                }}
+              >
+                ⚙ Customise…
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {viewMode === 'scroll' && docVersion > 0 && docRef.current && (
@@ -2210,11 +2331,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             className="anim-fade fixed inset-0 z-30 bg-black/45"
             onClick={() => setShowSettings(false)}
           />
-          {/* Phone: a Books-style bottom sheet that takes only the height it
-              needs. Desktop (sm+): the familiar right-side panel. */}
-          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[76dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:safe-top sm:top-0 sm:left-auto sm:right-0 sm:max-h-none sm:w-[400px] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-10 sm:shadow-[-12px_0_48px_rgba(0,0,0,0.4)]">
-            <div className="mb-6 flex items-center justify-between">
-              <div className="font-serif text-xl text-ink-bright">Reading settings</div>
+          {/* Customise (Books model): phone = bottom sheet, desktop = centered
+              card. Themes and layout live in the Aa popover; this holds the
+              rest, under a live preview of the current look. */}
+          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:max-h-[82vh] sm:w-[420px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="font-serif text-xl text-ink-bright">Customise</div>
               <button
                 aria-label="Close settings"
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
@@ -2224,53 +2346,32 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </button>
             </div>
 
-            <div className="mb-3.5 flex items-baseline justify-between">
-              <span className="text-[11px] uppercase tracking-[0.14em] text-ink-kicker">Theme</span>
-              <span className="text-[11px] text-ink-faint">
-                {THEMES.find((t) => t.id === themeId)?.name}
-              </span>
+            {/* Live preview: the current theme and (in Text Mode) type. */}
+            <div
+              className="mb-4 rounded-2xl px-4 pb-3 pt-2.5"
+              style={{
+                background: chromeBg,
+                color: rgbCss(theme.fg),
+                border: `1px solid ${hairline}`,
+              }}
+            >
+              <div className="font-serif text-2xl">Aa</div>
+              <p
+                className="mt-0.5 font-serif text-[12.5px]"
+                style={
+                  viewMode === 'text'
+                    ? {
+                        fontFamily: fontStack(textFontId),
+                        lineHeight: textLeading,
+                        textAlign: textJustify ? 'justify' : 'left',
+                      }
+                    : { lineHeight: 1.6 }
+                }
+              >
+                Glowing warmth radiated from the hole. I took a step, falling down a little further
+                than I anticipated.
+              </p>
             </div>
-            <div className="mb-3 grid grid-cols-4 gap-2">
-              {THEMES.map((t) => (
-                <button
-                  key={t.id}
-                  aria-label={`${t.name} theme`}
-                  title={t.name}
-                  className={`grid h-11 place-items-center rounded-xl border-2 transition-transform active:scale-[0.95] ${
-                    t.id === themeId ? 'border-accent' : 'border-night-700'
-                  }`}
-                  style={{ background: rgbCss(t.bg) }}
-                  onClick={() => setThemeId(t.id)}
-                >
-                  <span className="font-serif text-[15px] leading-none" style={{ color: rgbCss(t.fg) }}>
-                    Aa
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="mb-3 mt-6 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
-              Layout
-            </div>
-            <div className="flex rounded-xl bg-inset p-1">
-              {(['paged', 'scroll', 'text'] as const).map((m) => (
-                <button
-                  key={m}
-                  className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold capitalize transition-colors ${
-                    viewMode === m ? 'bg-accent text-accent-on' : 'text-ink-mid'
-                  }`}
-                  onClick={() => setViewMode(m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-            <p className="mb-5 mt-2.5 px-1 text-xs leading-relaxed text-ink-faint">
-              {viewMode === 'paged'
-                ? 'The exact page. Tap the sides to turn; pinch to zoom; select text to copy or highlight.'
-                : viewMode === 'scroll'
-                  ? 'The exact pages, flowing as you scroll.'
-                  : 'Reflowed into your font and spacing — for prose. Flip to Paged for figure or scanned pages.'}
-            </p>
 
             {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
             {viewMode === 'text' && (
