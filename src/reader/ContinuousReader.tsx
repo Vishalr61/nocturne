@@ -159,14 +159,32 @@ export function ContinuousReader({
   )
 
   // Content size changed (zoom/resize): existing canvases are the wrong
-  // resolution, so drop them and let the render effect repaint the visible ones.
+  // resolution, so drop them and let the render effect repaint the visible
+  // ones. DEBOUNCED: a zoom slider drag or stepper spam fires this per tick,
+  // and re-rendering every visible page per tick churned enough canvas memory
+  // that iOS jetsam killed the app. The old (soft) canvases stay on screen
+  // until the value settles, then one repaint lands. First layout paints
+  // immediately — there's nothing on screen yet to keep.
+  const paintedWidth = useRef(0)
   useEffect(() => {
-    rendered.current.clear()
-    redraw()
+    if (!contentWidth) return
+    if (paintedWidth.current === 0) {
+      paintedWidth.current = contentWidth
+      return // initial layout: the render effect below handles it, no delay
+    }
+    if (paintedWidth.current === contentWidth) return
+    const t = window.setTimeout(() => {
+      paintedWidth.current = contentWidth
+      for (const c of rendered.current.values()) releaseCanvas(c)
+      rendered.current.clear()
+      redraw()
+    }, 180)
+    return () => window.clearTimeout(t)
   }, [contentWidth, redraw])
 
   // A new render context whenever the look changes; the old canvases are stale.
   useEffect(() => {
+    for (const c of rendered.current.values()) releaseCanvas(c)
     rendered.current.clear()
     clsCache.current.clear()
     redraw()
@@ -341,13 +359,25 @@ export function ContinuousReader({
     }
   }, [page, slotHeight, scrollToPage, scrollToTop])
 
+  // Evicted canvases go back in a small pool for reuse — allocating a fresh
+  // multi-megabyte canvas per page per scroll/zoom leaves a wake of garbage
+  // that iOS is slow to reclaim (part of the zoom-spam crash).
+  const canvasPool = useRef<HTMLCanvasElement[]>([])
+  const releaseCanvas = (c: HTMLCanvasElement) => {
+    if (canvasPool.current.length < 6) canvasPool.current.push(c)
+  }
+
   // Render (and evict) canvases to match the visible window. Renders are
   // serialized on one chain because they share the GL + source canvases.
   useEffect(() => {
     if (!contentWidth || !slotHeight || !recolorRef.current) return
     // Evict far pages so memory stays bounded on a phone.
     for (const n of [...rendered.current.keys()]) {
-      if (n < visible.from - 1 || n > visible.to + 1) rendered.current.delete(n)
+      if (n < visible.from - 1 || n > visible.to + 1) {
+        const c = rendered.current.get(n)
+        rendered.current.delete(n)
+        if (c) releaseCanvas(c)
+      }
     }
     for (let n = visible.from; n <= visible.to; n++) {
       if (rendered.current.has(n)) continue
@@ -378,7 +408,7 @@ export function ContinuousReader({
           // Blit the recolored pixels out of the shared GL canvas into this
           // page's own 2D canvas, before the next page overwrites the GL canvas.
           const gl = glCanvasRef.current!
-          const out = document.createElement('canvas')
+          const out = canvasPool.current.pop() ?? document.createElement('canvas')
           out.width = gl.width
           out.height = gl.height
           out.getContext('2d')!.drawImage(gl, 0, 0)
