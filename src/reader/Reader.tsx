@@ -1843,12 +1843,17 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
               <button
                 aria-label="Contents"
-                className="flex h-9 w-9 flex-none items-center justify-center rounded-full text-[14px] transition-opacity hover:opacity-100"
+                aria-expanded={showToc}
+                className={`flex h-9 w-9 flex-none items-center justify-center rounded-full text-[14px] transition-opacity hover:opacity-100 ${
+                  showToc ? 'text-accent' : ''
+                }`}
                 style={{
-                  background: 'color-mix(in srgb, currentColor 10%, transparent)',
+                  background: showToc
+                    ? 'color-mix(in srgb, currentColor 15%, transparent)'
+                    : 'color-mix(in srgb, currentColor 10%, transparent)',
                   border: `1px solid ${hairline}`,
                 }}
-                onClick={() => setShowToc(true)}
+                onClick={() => setShowToc((t) => !t)}
               >
                 ☰
               </button>
