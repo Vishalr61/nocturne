@@ -33,7 +33,7 @@ def switch_mode(page, label):
             break
         except Exception:
             continue
-    page.wait_for_selector("text=Reading settings", timeout=5000)
+    page.wait_for_selector("button:has-text('Customise')", timeout=5000)
     page.locator("button:has-text('%s')" % label).last.click()
     time.sleep(0.5)
     page.locator("button[aria-label='Close settings']").click()
