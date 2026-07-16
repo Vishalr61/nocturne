@@ -10,15 +10,20 @@ import {
   isPersisted,
   listBooks,
   listGhostBooks,
+  deleteVocabWord,
+  listVocab,
   readingStats,
   renameBook,
   requestPersistentStorage,
+  restoreVocabWord,
   setBookFinished,
+  updateVocabWord,
   storageEstimate,
   type Book,
   type KnownBook,
   type ProgressByBook,
   type ReadingStats,
+  type VocabWord,
 } from '../storage/db'
 import {
   adoptSecret,
@@ -78,6 +83,13 @@ export function Shelf({ onOpen }: ShelfProps) {
     return v === 'title' || v === 'progress' ? v : 'recent'
   })
   const [stats, setStats] = useState<ReadingStats | null>(null)
+  // Vocabulary notebook: words saved from the dictionary card while reading.
+  const [vocab, setVocab] = useState<VocabWord[]>([])
+  const [showVocab, setShowVocab] = useState(false)
+  const [vocabQuery, setVocabQuery] = useState('')
+  const [vocabOpen, setVocabOpen] = useState<string | null>(null) // expanded word id
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
+  const [lastDeleted, setLastDeleted] = useState<VocabWord | null>(null)
   // Install: Chromium hands us a deferred prompt; iOS has no API, only steps.
   const [installEvt, setInstallEvt] = useState<InstallPromptEvent | null>(null)
   const [showInstallHelp, setShowInstallHelp] = useState(false)
@@ -116,6 +128,7 @@ export function Shelf({ onOpen }: ShelfProps) {
     setBooks(bs)
     setProgress(ps)
     void readingStats().then(setStats)
+    void listVocab().then(setVocab)
     // One badge for "you've marked this book up", bookmarks + highlights.
     const total: Record<string, number> = { ...bm }
     for (const [id, n] of Object.entries(hl)) total[id] = (total[id] ?? 0) + n
@@ -456,6 +469,19 @@ export function Shelf({ onOpen }: ShelfProps) {
               </div>
             )}
 
+            {vocab.length > 0 && (
+              <button
+                className="mx-auto mt-4 flex w-full max-w-lg items-baseline gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-left backdrop-blur-sm transition-colors hover:border-accent/40"
+                onClick={() => setShowVocab(true)}
+              >
+                <span className="font-serif text-[15px] text-ink-head">Vocabulary</span>
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-dim">
+                  {vocab.slice(0, 3).map((v) => v.word).join(' · ')}
+                </span>
+                <span className="flex-none text-[12px] tabular-nums text-accent">{vocab.length} ›</span>
+              </button>
+            )}
+
             <div className="mb-5 mt-12 flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="font-serif text-[22px] text-ink-head">Your shelf</h2>
               <div className="flex items-baseline gap-3">
@@ -649,6 +675,131 @@ export function Shelf({ onOpen }: ShelfProps) {
           </>
         )}
       </main>
+
+      {/* Vocabulary notebook: every word saved from the dictionary card —
+          searchable, annotatable, deletable (with undo). */}
+      {showVocab && (
+        <div
+          className="anim-fade fixed inset-0 z-40 flex items-end justify-center bg-black/50 sm:items-center"
+          onClick={() => setShowVocab(false)}
+        >
+          <div
+            className="anim-rise flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl border border-line bg-panel p-5 sm:max-h-[80vh] sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-serif text-lg text-ink-bright">
+                Vocabulary <span className="ml-1 text-[12px] text-ink-faint">{vocab.length}</span>
+              </h3>
+              <button
+                aria-label="Close vocabulary"
+                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft hover:text-ink-body"
+                onClick={() => setShowVocab(false)}
+              >
+                ✕
+              </button>
+            </div>
+            {vocab.length > 6 && (
+              <input
+                aria-label="Search words"
+                placeholder="Search…"
+                className="mb-3 rounded-lg border border-line bg-inset px-2.5 py-2 text-[13px] text-ink-body outline-none placeholder:text-ink-faint focus:border-accent/60"
+                value={vocabQuery}
+                onChange={(e) => setVocabQuery(e.target.value)}
+              />
+            )}
+            {lastDeleted && (
+              <div className="mb-2 flex items-center justify-between rounded-lg bg-inset px-3 py-2 text-[12px] text-ink-mid">
+                <span>“{lastDeleted.word}” deleted</span>
+                <button
+                  className="font-semibold text-accent"
+                  onClick={() => {
+                    void restoreVocabWord(lastDeleted).then(async () => {
+                      setLastDeleted(null)
+                      setVocab(await listVocab())
+                    })
+                  }}
+                >
+                  Undo
+                </button>
+              </div>
+            )}
+            <div className="-mx-1 flex-1 overflow-y-auto px-1">
+              {vocab
+                .filter(
+                  (v) =>
+                    !vocabQuery ||
+                    v.word.toLowerCase().includes(vocabQuery.toLowerCase()) ||
+                    v.def.toLowerCase().includes(vocabQuery.toLowerCase()),
+                )
+                .map((v) => (
+                  <div key={v.id} className="border-b border-line/50 py-2.5 last:border-b-0">
+                    <button
+                      className="flex w-full items-baseline gap-2 text-left"
+                      onClick={() => setVocabOpen((o) => (o === v.id ? null : v.id))}
+                    >
+                      <span className="font-serif text-[15px] text-ink-bright">{v.word}</span>
+                      <span className="rounded bg-inset px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-accent">
+                        {v.pos}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-ink-mid">
+                        {v.note || v.def}
+                      </span>
+                    </button>
+                    {vocabOpen === v.id && (
+                      <div className="anim-fade mt-2 space-y-2 pl-1">
+                        <p className="text-[12.5px] leading-snug text-ink-mid">{v.def}</p>
+                        {v.context && (
+                          <p className="border-l-2 border-line/70 pl-2.5 text-[12px] italic text-ink-soft">
+                            {v.context}
+                          </p>
+                        )}
+                        {v.bookTitle && (
+                          <p className="text-[11px] text-ink-faint">from {v.bookTitle}</p>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <input
+                            aria-label={`Note for ${v.word}`}
+                            placeholder="Your note…"
+                            className="min-w-0 flex-1 rounded-lg border border-line bg-inset px-2.5 py-1.5 text-[12.5px] text-ink-body outline-none placeholder:text-ink-faint focus:border-accent/60"
+                            value={noteDrafts[v.id] ?? v.note ?? ''}
+                            onChange={(e) =>
+                              setNoteDrafts((d) => ({ ...d, [v.id]: e.target.value }))
+                            }
+                            onBlur={() => {
+                              const draft = noteDrafts[v.id]
+                              if (draft !== undefined && draft !== (v.note ?? ''))
+                                void updateVocabWord(v.id, { note: draft || undefined }).then(
+                                  async () => setVocab(await listVocab()),
+                                )
+                            }}
+                          />
+                          <button
+                            aria-label={`Delete ${v.word}`}
+                            className="flex-none rounded-lg border border-line px-2.5 py-1.5 text-[12px] text-ink-soft hover:text-ink-body"
+                            onClick={() => {
+                              void deleteVocabWord(v.id).then(async (row) => {
+                                setLastDeleted(row ?? null)
+                                setVocab(await listVocab())
+                              })
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              {vocab.length === 0 && (
+                <p className="py-8 text-center text-[13px] text-ink-faint">
+                  Double-tap any word while reading, then ＋ Save.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Install: the one action that makes the library durable on iOS — an
           installed app is exempt from Safari's storage cleanup. Chromium gets

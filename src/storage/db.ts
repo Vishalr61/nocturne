@@ -137,6 +137,23 @@ export interface SyncState {
   lastSyncAt?: number
 }
 
+/** A word saved from the dictionary card — the reading-as-learning trail.
+ *  One entry per lemma; re-saving refreshes the context and date. */
+export interface VocabWord {
+  id: string // the lemma
+  word: string
+  pos: string
+  def: string
+  /** The reader's own note/mnemonic, editable in the notebook. */
+  note?: string
+  bookId?: string
+  bookTitle?: string
+  /** The sentence the word was tapped in. */
+  context?: string
+  savedAt: number
+  updatedAt?: number
+}
+
 /** One day of reading, accumulated locally. Never synced — stats are a
  *  private mirror, not a leaderboard. */
 export interface ReadingDay {
@@ -157,6 +174,7 @@ const db = new Dexie('nocturne') as Dexie & {
   knownBooks: EntityTable<KnownBook, 'bookId'>
   syncState: EntityTable<SyncState, 'id'>
   readingLog: EntityTable<ReadingDay, 'day'>
+  vocab: EntityTable<VocabWord, 'id'>
 }
 
 db.version(1).stores({
@@ -212,6 +230,20 @@ db.version(6).stores({
   knownBooks: 'bookId',
   syncState: 'id',
   readingLog: 'day',
+})
+
+db.version(7).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+  highlights: 'id, bookId, [bookId+page]',
+  tombstones: 'naturalKey, deletedAt',
+  knownBooks: 'bookId',
+  syncState: 'id',
+  readingLog: 'day',
+  vocab: 'id, savedAt',
 })
 
 // --- reading stats --------------------------------------------------------
@@ -286,6 +318,7 @@ export const natProfile = (id: string) => `profile:${id}`
 export const natProgress = (id: string) => `progress:${id}`
 export const natBookmark = (id: string, page: number) => `bookmark:${id}:${page}`
 export const natHighlight = (hid: string) => `highlight:${hid}`
+export const natVocab = (id: string) => `vocab:${id}`
 
 async function recordTombstone(naturalKey: string, body: Record<string, unknown>): Promise<void> {
   await db.tombstones.put({ naturalKey, deletedAt: Date.now(), body: { ...body, deleted: true } })
@@ -335,6 +368,54 @@ export async function removeHighlight(id: string): Promise<void> {
   const h = await db.highlights.get(id)
   await db.highlights.delete(id)
   if (h) await recordTombstone(natHighlight(id), { t: 'highlight', id, bookId: h.bookId, page: h.page })
+}
+
+// --- vocabulary notebook -----------------------------------------------------
+
+/** Upsert a saved word (re-saving refreshes context/book/date, keeps the note). */
+export async function saveVocabWord(
+  entry: Omit<VocabWord, 'savedAt' | 'updatedAt'>,
+): Promise<void> {
+  const now = Date.now()
+  const cur = await db.vocab.get(entry.id)
+  await db.vocab.put({
+    ...entry,
+    note: cur?.note,
+    savedAt: cur?.savedAt ?? now,
+    updatedAt: now,
+  })
+}
+
+export async function listVocab(): Promise<VocabWord[]> {
+  const rows = await db.vocab.toArray()
+  return rows.sort((a, b) => b.savedAt - a.savedAt)
+}
+
+export async function updateVocabWord(
+  id: string,
+  patch: Partial<Pick<VocabWord, 'note' | 'def'>>,
+): Promise<void> {
+  await db.vocab.update(id, { ...patch, updatedAt: Date.now() })
+}
+
+export async function deleteVocabWord(id: string): Promise<VocabWord | undefined> {
+  const row = await db.vocab.get(id)
+  await db.vocab.delete(id)
+  if (row) await recordTombstone(natVocab(id), { t: 'vocab', id })
+  return row
+}
+
+export async function restoreVocabWord(row: VocabWord): Promise<void> {
+  await db.vocab.put({ ...row, updatedAt: Date.now() })
+  await db.tombstones.delete(natVocab(row.id))
+}
+
+export async function vocabCount(): Promise<number> {
+  return db.vocab.count()
+}
+
+export async function allVocab(): Promise<VocabWord[]> {
+  return db.vocab.toArray()
 }
 
 /** How many highlights each book has, for the shelf. */
