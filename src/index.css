@@ -14,6 +14,24 @@
   .safe-bottom {
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.875rem);
   }
+  /* Theme-relative surfaces: tinted from the CURRENT text colour, so the
+     settings popover and Customise sheet re-dress for whatever theme the
+     page is wearing — dark glass on night themes, warm light glass on Paper. */
+  .tint-card {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  .tint-border {
+    border-color: color-mix(in srgb, currentColor 18%, transparent);
+  }
+  .divide-tint > * + * {
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* The app owns every pixel: any overscroll or safe-area gap shows the app's
@@ -82,7 +100,7 @@ body {
   background: linear-gradient(
     90deg,
     rgb(var(--accent-rgb)) var(--fill, 0%),
-    #2b201380 var(--fill, 0%)
+    color-mix(in srgb, currentColor 22%, transparent) var(--fill, 0%)
   );
 }
 .cozy-range::-webkit-slider-thumb {
@@ -97,7 +115,7 @@ body {
 .cozy-range::-moz-range-track {
   height: 3px;
   border-radius: 3px;
-  background: #2b201380;
+  background: color-mix(in srgb, currentColor 22%, transparent);
 }
 .cozy-range::-moz-range-progress {
   height: 3px;
