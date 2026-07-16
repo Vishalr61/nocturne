@@ -160,10 +160,13 @@ blocked item — positions and highlights should follow you.
 
 ## 8. Small finish work (P2, batched when touching the area)
 
-- ✅ **Theme scheduling**: "Auto by time" toggle — Paper 07–19, your dark
-  theme at night. Manual picks always win until the next day/night boundary.
+- ~~Theme scheduling~~: built, tried, removed 2026-07-16 — he prefers
+  switching themes by hand. (Code lives in git history if wanted again.)
 - **Custom theme editor**: bg/fg pickers on the existing THEMES model.
-- ✅ **Tap-zone preferences**: "Left tap turns forward" toggle (one-handed).
+- ✅ **Tap zones**: both side thirds turn FORWARD (one-handed; back is a
+  swipe or arrow key) — built in, no setting. Auto-hide chrome is also
+  always on now; a tap on text dismisses visible chrome but never summons
+  it. Image-brightness slider removed (night dimmer covers it).
 - **Search**: diacritic-insensitive matching, recent searches.
 - ✅ **Back-to-spot pill**: any jump (TOC, search, scrubber, bookmark, page
   box) offers "↩ Back to page N"; retires when you're back in the
