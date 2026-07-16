@@ -2560,7 +2560,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 onTap={() => void onVectorExport()}
               />
               <ExportChip
-                icon="❧"
+                icon="▤"
                 label="EPUB"
                 prog={epubbing}
                 disabled={!pageCount}
