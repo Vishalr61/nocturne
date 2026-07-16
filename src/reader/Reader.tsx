@@ -1863,10 +1863,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               )}
             </div>
-            <div className="flex items-center">
+            <div className="flex items-center gap-1 pb-0.5">
               <button
                 aria-label="Back to library"
-                className="px-2 py-1 text-[17px] opacity-65 transition-opacity hover:opacity-100"
+                className="-ml-1 px-3 py-1 text-[24px] leading-none opacity-75 transition-opacity hover:opacity-100"
                 onClick={onShelf}
               >
                 ‹
@@ -1878,8 +1878,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
               <button
                 aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
-                className={`px-2.5 py-1 transition-opacity hover:opacity-100 ${
-                  marked ? 'text-accent opacity-100' : 'opacity-65'
+                className={`px-3 py-1 text-[19px] leading-none transition-opacity hover:opacity-100 ${
+                  marked ? 'text-accent opacity-100' : 'opacity-75'
                 }`}
                 onClick={() => void toggleBookmark()}
               >
@@ -1887,7 +1887,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </button>
               <button
                 aria-label="Reading settings"
-                className="px-2.5 py-1 font-serif opacity-65 transition-opacity hover:opacity-100"
+                className="-mr-1 px-3 py-1 font-serif text-[17px] leading-none opacity-75 transition-opacity hover:opacity-100"
                 onClick={() => setShowQuick(true)}
               >
                 Aa
@@ -2341,19 +2341,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           shapes the page lives here, surfaced only when you want it. */}
       {showSettings && (
         <>
-          <div
-            className="anim-fade fixed inset-0 z-30 bg-black/45"
+          <button
+            aria-label="Close customise"
+            className="fixed inset-0 z-30 cursor-default"
             onClick={() => setShowSettings(false)}
           />
           {/* Customise, direction B: tap-tiles for the on/offs, slim rows for
-              the true sliders, export as chips. Phone = bottom sheet; desktop
-              = centered card (inset-0 + m-auto — anim-panel eats transforms). */}
+              the true sliders, export as chips — a popover in the Aa popover's
+              exact language, opening upward from the bar on every screen. */}
+          <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-3xl px-3">
           <div
-            className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t p-4 font-sans shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-5 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]"
+            className="anim-fade pointer-events-auto mb-[86px] ml-auto max-h-[72dvh] w-[318px] overflow-y-auto rounded-2xl p-3.5 font-sans"
             style={{
               background: `color-mix(in srgb, ${chromeBg} 90%, ${rgbCss(theme.fg)} 5%)`,
               color: rgbCss(theme.fg),
-              borderColor: hairline,
+              border: `1px solid ${hairline}`,
+              boxShadow: '0 24px 48px -16px rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
             }}
           >
             <div className="mb-3 flex items-center gap-2.5">
@@ -2579,6 +2584,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 {exportRange ? 'Whole book' : 'Pages'}
               </button>
             </div>
+          </div>
           </div>
         </>
       )}
