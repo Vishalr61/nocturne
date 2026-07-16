@@ -70,54 +70,6 @@ const SAT_CUT = 0.25 // colour threshold; per-page structure decides the rest
 /** Stable empty array so clearing highlights never triggers a needless render. */
 const NO_HIGHLIGHTS: HighlightRect[] = []
 
-/** A collapsible settings group: the drawer shows headlines, not everything.
- *  Local state (not <details open>) so slider-driven re-renders can't snap a
- *  section back to its default. */
-function DrawerSection({
-  title,
-  hint,
-  defaultOpen = false,
-  children,
-}: {
-  title: string
-  hint?: string
-  defaultOpen?: boolean
-  children: React.ReactNode
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div
-      className={`mb-3 overflow-hidden rounded-2xl border transition-colors ${
-        open ? 'border-accent/25 bg-night-800/60' : 'border-line/60 bg-night-800/25'
-      }`}
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        className="flex w-full items-center justify-between px-4 py-3.5 text-left"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="flex items-baseline gap-2">
-          <span
-            className={`text-[12px] font-semibold uppercase tracking-[0.1em] ${
-              open ? 'text-accent' : 'text-ink-body'
-            }`}
-          >
-            {title}
-          </span>
-          {hint && !open && <span className="text-[12px] text-ink-faint">{hint}</span>}
-        </span>
-        <span
-          className={`text-[15px] text-ink-faint transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
-        >
-          ›
-        </span>
-      </button>
-      {open && <div className="border-t border-line/50 px-3 pb-3 pt-3">{children}</div>}
-    </div>
-  )
-}
-
 const POS_LABEL = {
   n: 'noun',
   v: 'verb',
@@ -1910,7 +1862,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               {/* Every theme, one strip, scrolls right. No labels — the swatch
                   IS the label; Original wears colour dots (its point is that
                   colours pass through untouched). */}
-              <div className="-mx-1 mb-3 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
+              <div className="no-scrollbar -mx-1 mb-3 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
                 {THEMES.map((t) => (
                   <button
                     key={t.id}
@@ -2340,12 +2292,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               rest, under a live preview of the current look. */}
           {/* Desktop centering uses inset-0 + m-auto + h-fit, NOT translates —
               anim-panel's keyframes end at transform:none and would wipe them. */}
-          <div className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t border-line/70 bg-panel/95 p-5 font-sans text-ink-body shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]">
+          <div
+            className="anim-panel safe-bottom fixed inset-x-0 bottom-0 z-40 max-h-[80dvh] overflow-y-auto rounded-t-[26px] border-t p-5 font-sans shadow-[0_-12px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[82vh] sm:w-[420px] sm:rounded-3xl sm:border sm:pb-6 sm:shadow-[0_32px_80px_rgba(0,0,0,0.55)]"
+            style={{
+              background: `color-mix(in srgb, ${chromeBg} 90%, ${rgbCss(theme.fg)} 5%)`,
+              color: rgbCss(theme.fg),
+              borderColor: hairline,
+            }}
+          >
             <div className="mb-4 flex items-center justify-between">
-              <div className="font-serif text-xl text-ink-bright">Customise</div>
+              <div className="font-serif text-xl">Customise</div>
               <button
                 aria-label="Close settings"
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                className="flex h-8 w-8 items-center justify-center rounded-full tint-card opacity-70 transition-colors hover:"
                 onClick={() => setShowSettings(false)}
               >
                 ✕
@@ -2381,18 +2340,19 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
             {/* Text Mode: font, size, spacing, measure, justification — reflow. */}
             {viewMode === 'text' && (
-              <DrawerSection title="Type" hint="font · size · spacing" defaultOpen>
-                <div className="mb-4 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+              <>
+              <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Type</div>
+                <div className="mb-4 text-[10px] uppercase tracking-[0.14em] opacity-55">
                   Font
                 </div>
-                <div className="mb-6 grid grid-cols-2 gap-2">
+                <div className="mb-5 flex flex-wrap gap-2">
                   {TEXT_FONTS.map((f) => (
                     <button
                       key={f.id}
                       className={`rounded-xl border px-3 py-2.5 text-left leading-tight transition-colors ${
                         textFontId === f.id
-                          ? 'border-accent bg-accent/10 text-ink-bright'
-                          : 'border-line text-ink-mid'
+                          ? 'border-accent bg-accent/10'
+                          : 'tint-border opacity-75'
                       }`}
                       style={{ fontFamily: f.stack }}
                       onClick={() => setTextFontId(f.id)}
@@ -2402,14 +2362,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   ))}
                 </div>
 
-                <div className="mb-6 divide-y divide-line/60 rounded-2xl bg-night-800/50">
+                <div className="mb-6 divide-tint rounded-2xl tint-card">
                   <div className="px-4 py-3">
                     <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] text-ink-body">Text size</span>
-                      <span className="text-xs tabular-nums text-ink-soft">{textSize}px</span>
+                      <span className="text-[13px] ">Text size</span>
+                      <span className="text-xs tabular-nums opacity-70">{textSize}px</span>
                     </div>
                     <div className="flex items-center gap-3.5">
-                      <span className="font-serif text-[13px] text-ink-soft">A</span>
+                      <span className="font-serif text-[13px] opacity-70">A</span>
                       <input
                         aria-label="Text size"
                         type="range"
@@ -2421,13 +2381,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                         className="cozy-range flex-1"
                         style={{ '--fill': `${((textSize - 14) / 16) * 100}%` } as React.CSSProperties}
                       />
-                      <span className="font-serif text-2xl text-ink-soft">A</span>
+                      <span className="font-serif text-2xl opacity-70">A</span>
                     </div>
                   </div>
                   <div className="px-4 py-3">
                     <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] text-ink-body">Line spacing</span>
-                      <span className="text-xs tabular-nums text-ink-soft">
+                      <span className="text-[13px] ">Line spacing</span>
+                      <span className="text-xs tabular-nums opacity-70">
                         {textLeading.toFixed(2)}
                       </span>
                     </div>
@@ -2445,10 +2405,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </div>
                 </div>
 
-                <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] opacity-55">
                   Reading width
                 </div>
-                <div className="mb-6 flex rounded-xl bg-inset p-1">
+                <div className="mb-6 flex rounded-xl tint-card p-1">
                   {(
                     [
                       ['Narrow', 520],
@@ -2459,7 +2419,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     <button
                       key={w}
                       className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                        textWidth === w ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                        textWidth === w ? 'bg-accent text-accent-on' : 'opacity-75'
                       }`}
                       onClick={() => setTextWidth(w)}
                     >
@@ -2468,13 +2428,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   ))}
                 </div>
 
-                <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-ink-kicker">
+                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] opacity-55">
                   Paragraphs
                 </div>
-                <div className="mb-4 flex rounded-xl bg-inset p-1">
+                <div className="mb-4 flex rounded-xl tint-card p-1">
                   <button
                     className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                      textPara === 'indent' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                      textPara === 'indent' ? 'bg-accent text-accent-on' : 'opacity-75'
                     }`}
                     onClick={() => setTextPara('indent')}
                   >
@@ -2482,16 +2442,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </button>
                   <button
                     className={`flex-1 rounded-[9px] py-2 text-[13px] font-medium transition-colors ${
-                      textPara === 'spaced' ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                      textPara === 'spaced' ? 'bg-accent text-accent-on' : 'opacity-75'
                     }`}
                     onClick={() => setTextPara('spaced')}
                   >
                     Spaced
                   </button>
                 </div>
-                <div className="flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
-                  <span className="text-[13px] text-ink-body">
-                    Justify <span className="text-ink-faint">(+ hyphenate)</span>
+                <div className="flex items-center justify-between rounded-2xl tint-card px-4 py-3">
+                  <span className="text-[13px] ">
+                    Justify <span className="opacity-55">(+ hyphenate)</span>
                   </span>
                   <IosToggle
                     checked={textJustify}
@@ -2499,30 +2459,31 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     label="Justify text"
                   />
                 </div>
-              </DrawerSection>
+              </>
             )}
 
             {/* Page image: zoom (paged/scroll, not spread), brightness, crop —
                 grouped as one card; none of it applies to reflow. */}
             {viewMode !== 'text' && (
-              <DrawerSection title="Page" hint="spread · zoom · crop" defaultOpen>
+              <>
+              <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Page</div>
                 {viewMode === 'paged' && (
-                  <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/50 px-4 py-3">
-                    <span className="text-[13px] text-ink-body">
-                      Two-page spread <span className="text-ink-faint">(landscape)</span>
+                  <div className="mb-3 flex items-center justify-between rounded-2xl tint-card px-4 py-3">
+                    <span className="text-[13px] ">
+                      Two-page spread <span className="opacity-55">(landscape)</span>
                     </span>
                     <IosToggle checked={spread} onChange={setSpread} label="Two-page spread" />
                   </div>
                 )}
-                <div className="divide-y divide-line/60 rounded-2xl bg-night-800/50">
+                <div className="divide-tint rounded-2xl tint-card">
                 {!spreadActive && (
                   <div className="px-4 py-3">
                     <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] text-ink-body">Zoom</span>
-                      <span className="text-xs tabular-nums text-ink-soft">{zoom.toFixed(1)}×</span>
+                      <span className="text-[13px] ">Zoom</span>
+                      <span className="text-xs tabular-nums opacity-70">{zoom.toFixed(1)}×</span>
                     </div>
                     <div className="flex items-center gap-3.5">
-                      <span className="font-serif text-[13px] text-ink-soft">A</span>
+                      <span className="font-serif text-[13px] opacity-70">A</span>
                       <input
                         aria-label="Zoom"
                         type="range"
@@ -2534,10 +2495,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                         className="cozy-range flex-1"
                         style={{ '--fill': `${((zoom - 1) / 3) * 100}%` } as React.CSSProperties}
                       />
-                      <span className="font-serif text-2xl text-ink-soft">A</span>
+                      <span className="font-serif text-2xl opacity-70">A</span>
                     </div>
                     {viewMode === 'scroll' && (
-                      <p className="mt-2 text-xs leading-relaxed text-ink-faint">
+                      <p className="mt-2 text-xs leading-relaxed opacity-55">
                         At 1× the whole page fits the screen; slide up to fill the width.
                       </p>
                     )}
@@ -2545,7 +2506,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 )}
                 {cropBox && (
                   <div className="flex items-center justify-between px-4 py-3">
-                    <span className="text-[13px] text-ink-body">Crop margins</span>
+                    <span className="text-[13px] ">Crop margins</span>
                     <IosToggle
                       checked={cropMargins}
                       onChange={setCropMargins}
@@ -2554,33 +2515,14 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </div>
                 )}
                 </div>
-              </DrawerSection>
+              </>
             )}
 
-            {/* Night dimmer: the one comfort control left — goes below the
-                phone's minimum brightness, and doubles as image brightness. */}
-            <div className="mb-3 rounded-2xl bg-night-800/40 px-4 py-3">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[13px] text-ink-body">Night dimmer</span>
-                <span className="text-xs tabular-nums text-ink-soft">{Math.round(dim * 100)}%</span>
-              </div>
-              <input
-                aria-label="Night dimmer"
-                type="range"
-                min={0}
-                max={0.75}
-                step={0.05}
-                value={dim}
-                onChange={(e) => setDim(Number(e.target.value))}
-                className="cozy-range w-full"
-                style={{ '--fill': `${(dim / 0.75) * 100}%` } as React.CSSProperties}
-              />
-            </div>
-
+                        <div className="mb-2 mt-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Book</div>
             {'speechSynthesis' in window && (
-              <div className="mb-3 flex items-center justify-between rounded-2xl bg-night-800/40 px-4 py-3">
-                <span className="text-[13px] text-ink-body">
-                  Read aloud <span className="text-ink-faint">(follows along)</span>
+              <div className="mb-3 flex items-center justify-between rounded-2xl tint-card px-4 py-3">
+                <span className="text-[13px] ">
+                  Read aloud <span className="opacity-55">(follows along)</span>
                 </span>
                 <button
                   className={`rounded-full px-4 py-1.5 text-[13px] font-semibold transition-colors ${
@@ -2598,10 +2540,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
             {/* A finished export must never hide inside a folded section — the
                 Share row lives outside the Export group. */}
             {pendingSave && (
-              <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-night-800/50 px-4 py-3">
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-accent/40 tint-card px-4 py-3">
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] text-ink-body">{pendingSave.name}</div>
-                  <div className="text-[11px] text-ink-faint">Ready — send it to Files or Books</div>
+                  <div className="truncate text-[13px] ">{pendingSave.name}</div>
+                  <div className="text-[11px] opacity-55">Ready — send it to Files or Books</div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <button
@@ -2612,7 +2554,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   </button>
                   <button
                     aria-label="Discard export"
-                    className="flex h-7 w-7 items-center justify-center rounded-full bg-inset text-ink-soft transition-colors hover:text-ink-body"
+                    className="flex h-7 w-7 items-center justify-center rounded-full tint-card opacity-70 transition-colors hover:"
                     onClick={() => setPendingSave(null)}
                   >
                     ✕
@@ -2625,13 +2567,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 range), then a format. Every format follows the current reading
                 setup — theme, image brightness, crop, Text Mode type — so what
                 you save is what you saw. */}
-            <DrawerSection title="Export" hint="PDF · EPUB · pages">
-            <div className="flex rounded-xl bg-inset p-1">
+            
+            <div className="flex rounded-xl tint-card p-1">
               {([false, true] as const).map((r) => (
                 <button
                   key={String(r)}
                   className={`flex-1 rounded-[9px] py-2.5 text-[13px] font-semibold transition-colors ${
-                    exportRange === r ? 'bg-accent text-accent-on' : 'text-ink-mid'
+                    exportRange === r ? 'bg-accent text-accent-on' : 'opacity-75'
                   }`}
                   onClick={() => setExportRange(r)}
                 >
@@ -2648,9 +2590,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   max={pageCount || 1}
                   value={extractFrom}
                   onChange={(e) => setExtractFrom(Number(e.target.value) || 1)}
-                  className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                  className="w-16 rounded-xl border tint-border tint-card px-2 py-2 text-center text-sm tabular-nums  outline-none focus:border-accent/60"
                 />
-                <span className="text-xs text-ink-soft">to</span>
+                <span className="text-xs opacity-70">to</span>
                 <input
                   aria-label="Export to page"
                   type="number"
@@ -2658,16 +2600,16 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   max={pageCount || 1}
                   value={extractTo}
                   onChange={(e) => setExtractTo(Number(e.target.value) || 1)}
-                  className="w-16 rounded-xl border border-line bg-inset px-2 py-2 text-center text-sm tabular-nums text-ink-body outline-none focus:border-accent/60"
+                  className="w-16 rounded-xl border tint-border tint-card px-2 py-2 text-center text-sm tabular-nums  outline-none focus:border-accent/60"
                 />
-                <span className="text-[11px] text-ink-faint">of {pageCount || '—'}</span>
+                <span className="text-[11px] opacity-55">of {pageCount || '—'}</span>
               </div>
             )}
-            <div className="mt-3 divide-y divide-line/60 rounded-2xl bg-night-800/50">
+            <div className="mt-3 divide-tint rounded-2xl tint-card">
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
-                  <div className="text-[13px] text-ink-body">Dark PDF</div>
-                  <div className="text-[11px] text-ink-faint">
+                  <div className="text-[13px] ">Dark PDF</div>
+                  <div className="text-[11px] opacity-55">
                     The exact pages in this theme — keeps the book's own font
                   </div>
                 </div>
@@ -2682,10 +2624,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
-                  <div className="text-[13px] text-ink-body">
-                    Dark PDF, vector <span className="text-ink-faint">(beta)</span>
+                  <div className="text-[13px] ">
+                    Dark PDF, vector <span className="opacity-55">(beta)</span>
                   </div>
-                  <div className="text-[11px] text-ink-faint">
+                  <div className="text-[11px] opacity-55">
                     Same pages, selectable text, much smaller file
                   </div>
                 </div>
@@ -2700,10 +2642,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
-                  <div className="text-[13px] text-ink-body">
-                    EPUB <span className="text-ink-faint">(beta)</span>
+                  <div className="text-[13px] ">
+                    EPUB <span className="opacity-55">(beta)</span>
                   </div>
-                  <div className="text-[11px] text-ink-faint">
+                  <div className="text-[11px] opacity-55">
                     {epubErr
                       ? 'Needs a text layer — scans need OCR'
                       : 'The only format that takes your font, spacing and justify'}
@@ -2720,8 +2662,8 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
 
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div>
-                  <div className="text-[13px] text-ink-body">Original pages</div>
-                  <div className="text-[11px] text-ink-faint">
+                  <div className="text-[13px] ">Original pages</div>
+                  <div className="text-[11px] opacity-55">
                     {extractErr
                       ? 'Couldn’t extract from this PDF'
                       : exportRange
@@ -2738,10 +2680,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 </button>
               </div>
             </div>
-            </DrawerSection>
+            
 
             {cls && (
-              <div className="mt-6 text-center text-[11px] text-ink-faint">page: {cls.kind}</div>
+              <div className="mt-6 text-center text-[11px] opacity-55">page: {cls.kind}</div>
             )}
           </div>
         </>
@@ -3039,8 +2981,13 @@ function IosToggle({
       aria-checked={checked}
       aria-label={label}
       className={`relative h-7 w-12 flex-none rounded-full transition-colors duration-200 ${
-        checked ? 'bg-accent' : 'bg-night-700'
+        checked ? 'bg-accent' : ''
       }`}
+      style={
+        checked
+          ? undefined
+          : { background: 'color-mix(in srgb, currentColor 24%, transparent)' }
+      }
       onClick={() => onChange(!checked)}
     >
       <span
