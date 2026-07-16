@@ -310,10 +310,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   /** Scroll mode's exact strip position (page units) — persisted so reopening
    *  lands on the very line you left, not the page top. */
   const [scrollOff, setScrollOff] = useState<number | null>(null)
-  /** Footer stat readout: percent through the book, or pages left in chapter. */
-  const [footerStat, setFooterStat] = useState<'percent' | 'chapter'>(() =>
-    comfortStr('nocturne-footerstat', 'percent') === 'chapter' ? 'chapter' : 'percent',
-  )
   const [themeId, setThemeId] = useState(DEFAULT_THEME.id)
   const [imageDim, setImageDim] = useState(0.82)
   const [zoom, setZoom] = useState(1)
@@ -995,11 +991,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textwidth', String(textWidth))
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
-      localStorage.setItem('nocturne-footerstat', footerStat)
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara, footerStat])
+  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara])
 
   // Reading stats: time is the gap between page arrivals (capped, so a
   // put-down phone doesn't count the night), pages are forward movement
@@ -1774,16 +1769,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   )
   const pagePct = pageCount > 1 ? ((page - 1) / (pageCount - 1)) * 100 : 0
 
-  // Pages left in the current chapter: distance to the next outline
-  // destination (any depth). Null when the book has no outline.
-  const chapterLeft = useMemo(() => {
-    if (!toc.length || !pageCount) return null
-    let next: number | null = null
-    for (const t of toc) {
-      if (t.page > page && (next === null || t.page < next)) next = t.page
-    }
-    return (next ?? pageCount + 1) - page
-  }, [toc, page, pageCount])
 
   return (
     <div
@@ -1807,7 +1792,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       {chrome && (
         <div className="safe-bottom pointer-events-none absolute inset-x-0 bottom-0 z-[24] mx-auto w-full max-w-3xl px-3 pb-2">
           <div
-            className="pointer-events-auto rounded-2xl px-4 pb-1 pt-2.5"
+            className="pointer-events-auto flex items-center gap-2 rounded-2xl px-2.5 py-2"
             style={{
               background: `color-mix(in srgb, ${chromeBg} 86%, ${rgbCss(theme.fg)} 6%)`,
               border: `1px solid ${hairline}`,
@@ -1816,83 +1801,82 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               WebkitBackdropFilter: 'blur(16px)',
             }}
           >
-            <div className="flex items-center gap-3">
+            <button
+              aria-label="Back to library"
+              className="flex h-9 w-9 flex-none items-center justify-center rounded-full text-[19px] leading-none transition-opacity hover:opacity-100"
+              style={{
+                background: 'color-mix(in srgb, currentColor 10%, transparent)',
+                border: `1px solid ${hairline}`,
+              }}
+              onClick={onShelf}
+            >
+              ‹
+            </button>
+            <label
+              className="flex flex-none items-center rounded-full border px-2.5 py-1.5 text-[12px] tabular-nums"
+              style={{ borderColor: hairline }}
+            >
               <input
                 aria-label="Page number"
                 type="text"
                 inputMode="numeric"
-                className="w-11 rounded-full border bg-transparent px-1 py-0.5 text-center text-[12px] tabular-nums"
-                style={{ borderColor: hairline }}
+                className="w-7 bg-transparent text-right outline-none"
                 value={pageStr}
                 onChange={(e) => onPageInput(e.target.value)}
                 onBlur={() => setPageStr(String(page))}
               />
-              {pageCount > 1 && (
-                <input
-                  aria-label="Go to page"
-                  type="range"
-                  min={1}
-                  max={pageCount}
-                  step={1}
-                  value={page}
-                  onChange={(e) => jumpTo(Number(e.target.value))}
-                  className="cozy-range min-w-[80px] flex-1"
-                  style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
-                />
-              )}
+              <span className="opacity-50">/{pageCount || '—'}</span>
+            </label>
+            {pageCount > 1 && (
+              <input
+                aria-label="Go to page"
+                type="range"
+                min={1}
+                max={pageCount}
+                step={1}
+                value={page}
+                onChange={(e) => jumpTo(Number(e.target.value))}
+                className="cozy-range min-w-[50px] flex-1"
+                style={{ '--fill': `${pagePct}%` } as React.CSSProperties}
+              />
+            )}
+            {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
               <button
-                className="whitespace-nowrap text-[11px] tabular-nums opacity-55 transition-opacity hover:opacity-90"
-                aria-label="Switch between percent and pages left in chapter"
-                onClick={() =>
-                  chapterLeft != null &&
-                  setFooterStat((s) => (s === 'percent' ? 'chapter' : 'percent'))
-                }
+                aria-label="Contents"
+                className="flex h-9 w-9 flex-none items-center justify-center rounded-full text-[14px] transition-opacity hover:opacity-100"
+                style={{
+                  background: 'color-mix(in srgb, currentColor 10%, transparent)',
+                  border: `1px solid ${hairline}`,
+                }}
+                onClick={() => setShowToc(true)}
               >
-                {footerStat === 'chapter' && chapterLeft != null
-                  ? `${chapterLeft} left in ch.`
-                  : pageCount
-                    ? `${Math.round((page / pageCount) * 100)}%`
-                    : ''}
+                ☰
               </button>
-              {(toc.length > 0 || bookmarks.length > 0 || marks.length > 0) && (
-                <button
-                  className="whitespace-nowrap text-[12px] opacity-70 transition-opacity hover:opacity-100"
-                  onClick={() => setShowToc(true)}
-                >
-                  Contents
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-1 pb-0.5">
-              <button
-                aria-label="Back to library"
-                className="-ml-1 px-3 py-1 text-[24px] leading-none opacity-75 transition-opacity hover:opacity-100"
-                onClick={onShelf}
-              >
-                ‹
-              </button>
-              <div className="min-w-0 flex-1 text-center">
-                <span className="block truncate font-serif text-[11px] italic opacity-45">
-                  {title}
-                </span>
-              </div>
-              <button
-                aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
-                className={`px-3 py-1 text-[19px] leading-none transition-opacity hover:opacity-100 ${
-                  marked ? 'text-accent opacity-100' : 'opacity-75'
-                }`}
-                onClick={() => void toggleBookmark()}
-              >
-                {marked ? '★' : '☆'}
-              </button>
-              <button
-                aria-label="Reading settings"
-                className="-mr-1 px-3 py-1 font-serif text-[17px] leading-none opacity-75 transition-opacity hover:opacity-100"
-                onClick={() => setShowQuick(true)}
-              >
-                Aa
-              </button>
-            </div>
+            )}
+            <button
+              aria-label={marked ? 'Remove bookmark' : 'Bookmark this page'}
+              className={`flex h-9 w-9 flex-none items-center justify-center rounded-full text-[17px] transition-opacity hover:opacity-100 ${
+                marked ? 'text-accent' : ''
+              }`}
+              style={{
+                background: 'color-mix(in srgb, currentColor 10%, transparent)',
+                border: `1px solid ${hairline}`,
+              }}
+              onClick={() => void toggleBookmark()}
+            >
+              {marked ? '★' : '☆'}
+            </button>
+            <button
+              aria-label="Reading settings"
+              className="flex h-9 w-9 flex-none items-center justify-center rounded-full font-serif text-[15px] transition-opacity hover:opacity-100"
+              style={{
+                background: 'color-mix(in srgb, currentColor 10%, transparent)',
+                border: `1px solid ${hairline}`,
+              }}
+              onClick={() => setShowQuick(true)}
+            >
+              Aa
+            </button>
           </div>
         </div>
       )}
