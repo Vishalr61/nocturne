@@ -2219,6 +2219,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           epub={epubDoc}
           chapter={page - 1}
           onChapter={(c) => setPage(c + 1)}
+          onJump={(c) => jumpTo(c + 1)}
           initialFrac={scrollOff}
           onFrac={setScrollOff}
           fg={rgbCss(theme.fg)}

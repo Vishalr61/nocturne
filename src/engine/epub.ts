@@ -33,6 +33,8 @@ export interface EpubDoc {
   cover?: { data: Uint8Array; mime: string }
   /** Whole-book fraction for a position (chapter + fraction within it). */
   percentAt(chapter: number, frac: number): number
+  /** Plain text of a fragment target (a footnote body) in a chapter. */
+  noteText(chapter: number, fragId: string): string | null
   dispose(): void
 }
 
@@ -177,6 +179,19 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
     return url
   }
 
+  // Attributes that survive sanitization: fragment ids (so internal links
+  // and footnotes have targets), and lang/dir (mixed-language books).
+  const safeAttrs = (el: Element): string => {
+    let s = ''
+    const id = el.getAttribute('id')
+    if (id && /^[\w.:-]+$/.test(id)) s += ` id="${id}"`
+    const lang = el.getAttribute('lang') ?? el.getAttribute('xml:lang')
+    if (lang && /^[\w-]+$/.test(lang)) s += ` lang="${lang}"`
+    const dir = el.getAttribute('dir')
+    if (dir === 'rtl' || dir === 'ltr') s += ` dir="${dir}"`
+    return s
+  }
+
   const sanitizeNode = (node: Node, chapterPath: string, out: string[]): void => {
     if (node.nodeType === Node.TEXT_NODE) {
       out.push(escapeHtml(node.textContent ?? ''))
@@ -198,13 +213,40 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
       if (inner) sanitizeNode(inner, chapterPath, out)
       return
     }
+    if (tag === 'a') {
+      // Internal links resolve to our position model (chapter + fragment id)
+      // and become tappable spans; footnote refs are flagged so the reader
+      // can pop the note up in place instead of jumping away. External URLs
+      // flatten to plain text — the outside web doesn't belong in a book.
+      const href = el.getAttribute('href') ?? ''
+      const isExternal = /^[a-z][a-z0-9+.-]*:/i.test(href)
+      const targetChapter = href && !isExternal ? spineIndex.get(resolveHref(chapterPath, href)) : undefined
+      const frag = href.includes('#') ? href.slice(href.indexOf('#') + 1) : ''
+      const sameFile = !isExternal && href.startsWith('#')
+      const chapterAttr = sameFile ? undefined : targetChapter
+      const epubType = el.getAttribute('epub:type') ?? el.getAttribute('role') ?? ''
+      const isNote = /noteref|doc-noteref/.test(epubType)
+      if (!isExternal && (chapterAttr !== undefined || sameFile)) {
+        const attrs =
+          ` data-el="${chapterAttr ?? 'same'}"` +
+          (frag && /^[\w.:-]+$/.test(frag) ? ` data-ef="${frag}"` : '') +
+          (isNote ? ' data-note="1"' : '') +
+          safeAttrs(el)
+        out.push(`<span${attrs}>`)
+        for (const child of Array.from(el.childNodes)) sanitizeNode(child, chapterPath, out)
+        out.push('</span>')
+        return
+      }
+      out.push(`<span${safeAttrs(el)}>`)
+      for (const child of Array.from(el.childNodes)) sanitizeNode(child, chapterPath, out)
+      out.push('</span>')
+      return
+    }
     const keepBlock = BLOCK_TAGS.has(tag)
     const keepInline = INLINE_TAGS.has(tag)
     if (keepBlock || keepInline) {
-      // <a> becomes a span: internal links need a nav model we don't have yet,
-      // and external links don't belong inside a book page.
-      const outTag = tag === 'a' ? 'span' : tag === 'div' || tag === 'section' || tag === 'aside' ? 'div' : tag
-      out.push(`<${outTag}>`)
+      const outTag = tag === 'div' || tag === 'section' || tag === 'aside' ? 'div' : tag
+      out.push(`<${outTag}${safeAttrs(el)}>`)
       for (const child of Array.from(el.childNodes)) sanitizeNode(child, chapterPath, out)
       out.push(`</${outTag}>`)
       return
@@ -246,6 +288,16 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
       for (let i = 0; i < c; i++) before += charCounts[i]
       const f = Math.max(0, Math.min(1, frac))
       return Math.max(0, Math.min(1, (before + charCounts[c] * f) / totalChars))
+    },
+    noteText(chapter: number, fragId: string): string | null {
+      if (chapter < 0 || chapter >= spine.length || !/^[\w.:-]+$/.test(fragId)) return null
+      const host = document.createElement('div')
+      host.innerHTML = chapterHtml(chapter)
+      const el = host.querySelector(`#${CSS.escape(fragId)}`)
+      // The id often sits on the marker inside the note — read the whole block.
+      const block = el?.closest('p, li, div, blockquote') ?? el
+      const text = block?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+      return text.length > 1 ? text.slice(0, 600) : null
     },
     dispose() {
       for (const u of blobUrls) URL.revokeObjectURL(u)

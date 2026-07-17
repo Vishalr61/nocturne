@@ -169,3 +169,7 @@ body {
 .nocturne-epub pre { overflow-x: auto; font-size: 0.85em; padding: 0.8em; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; }
 .nocturne-epub table { border-collapse: collapse; margin: 1em 0; font-size: 0.9em; }
 .nocturne-epub td, .nocturne-epub th { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); padding: 0.3em 0.6em; }
+
+/* Internal EPUB links: quietly gold, obviously tappable. */
+.nocturne-epub [data-el] { color: rgb(var(--accent-rgb)); cursor: pointer; }
+.nocturne-epub sup [data-el] { text-decoration: none; }
