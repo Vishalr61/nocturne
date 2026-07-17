@@ -19,6 +19,8 @@ interface EpubReaderProps {
   onFrac?: (frac: number) => void
   /** An internal link was tapped — the parent records it as a jump. */
   onJump?: (chapter: number) => void
+  /** Land at a fraction within a chapter (search hits); nonce re-triggers. */
+  scrollTarget?: { chapter: number; frac: number; nonce: number } | null
   fg: string
   bg: string
   fontPx: number
@@ -37,6 +39,7 @@ export function EpubReader({
   initialFrac,
   onFrac,
   onJump,
+  scrollTarget,
   fg,
   bg,
   fontPx,
@@ -139,6 +142,28 @@ export function EpubReader({
     const sec = scroller?.querySelector<HTMLElement>(`[data-epubchapter="${items[0]}"]`)
     if (scroller && sec) scroller.scrollTop = sec.offsetTop + sec.offsetHeight * frac
   }, [items])
+
+  // A search hit lands at a fraction within its chapter.
+  const targetNonce = useRef(0)
+  useEffect(() => {
+    if (!scrollTarget || scrollTarget.nonce === targetNonce.current) return
+    targetNonce.current = scrollTarget.nonce
+    const { chapter: c, frac } = scrollTarget
+    reportedRef.current = c
+    const land = () => {
+      const scroller = scrollerRef.current
+      const sec = scroller?.querySelector<HTMLElement>(`[data-epubchapter="${c}"]`)
+      if (scroller && sec) scroller.scrollTop = sec.offsetTop + sec.offsetHeight * frac
+    }
+    setItems((cur) => {
+      if (cur.includes(c)) {
+        requestAnimationFrame(land)
+        return cur
+      }
+      requestAnimationFrame(() => requestAnimationFrame(land))
+      return [c]
+    })
+  }, [scrollTarget])
 
   // External jump (Contents, scrubber, back-pill): a chapter we didn't report.
   useEffect(() => {

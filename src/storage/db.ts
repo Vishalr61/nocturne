@@ -137,6 +137,12 @@ export interface SyncState {
   lastSyncAt?: number
 }
 
+/** Total active reading time per book — local, never synced. */
+export interface BookTime {
+  bookId: string
+  ms: number
+}
+
 /** A word saved from the dictionary card — the reading-as-learning trail.
  *  One entry per lemma; re-saving refreshes the context and date. */
 export interface VocabWord {
@@ -175,6 +181,7 @@ const db = new Dexie('nocturne') as Dexie & {
   syncState: EntityTable<SyncState, 'id'>
   readingLog: EntityTable<ReadingDay, 'day'>
   vocab: EntityTable<VocabWord, 'id'>
+  bookTime: EntityTable<BookTime, 'bookId'>
 }
 
 db.version(1).stores({
@@ -246,19 +253,48 @@ db.version(7).stores({
   vocab: 'id, savedAt',
 })
 
+db.version(8).stores({
+  books: 'id, addedAt, title',
+  profiles: 'bookId',
+  progress: 'bookId, updatedAt',
+  pendingTitles: 'bookId',
+  bookmarks: 'id, bookId, page',
+  highlights: 'id, bookId, [bookId+page]',
+  tombstones: 'naturalKey, deletedAt',
+  knownBooks: 'bookId',
+  syncState: 'id',
+  readingLog: 'day',
+  vocab: 'id, savedAt',
+  bookTime: 'bookId',
+})
+
 // --- reading stats --------------------------------------------------------
 
 const localDay = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 /** Credit reading time/pages to today's log (called by the reader, throttled). */
-export async function logReading(ms: number, pages: number): Promise<void> {
+export async function logReading(ms: number, pages: number, bookId?: string): Promise<void> {
   if (ms <= 0 && pages <= 0) return
   const day = localDay()
-  await db.transaction('rw', db.readingLog, async () => {
+  await db.transaction('rw', db.readingLog, db.bookTime, async () => {
     const row = await db.readingLog.get(day)
     await db.readingLog.put({ day, ms: (row?.ms ?? 0) + ms, pages: (row?.pages ?? 0) + pages })
+    if (bookId && ms > 0) {
+      const bt = await db.bookTime.get(bookId)
+      await db.bookTime.put({ bookId, ms: (bt?.ms ?? 0) + ms })
+    }
   })
+}
+
+/** Total active reading time for one book (0 when never read). */
+export async function bookReadingMs(bookId: string): Promise<number> {
+  return (await db.bookTime.get(bookId))?.ms ?? 0
+}
+
+export async function allBookTimes(): Promise<Record<string, number>> {
+  const rows = await db.bookTime.toArray()
+  return Object.fromEntries(rows.map((r) => [r.bookId, r.ms]))
 }
 
 export interface ReadingStats {

@@ -12,6 +12,7 @@ import {
   listGhostBooks,
   deleteVocabWord,
   listVocab,
+  allBookTimes,
   readingStats,
   renameBook,
   requestPersistentStorage,
@@ -33,7 +34,7 @@ import {
   syncNow,
 } from '../storage/syncClient'
 import { importBook } from './import'
-import { loadPace, timeLeft, paceReady } from '../engine/pace'
+import { loadPace, timeLeft, paceReady, fmtLeft } from '../engine/pace'
 
 /** Chromium's beforeinstallprompt event (not in the TS DOM lib). */
 interface InstallPromptEvent extends Event {
@@ -84,6 +85,7 @@ export function Shelf({ onOpen }: ShelfProps) {
     return v === 'title' || v === 'progress' ? v : 'recent'
   })
   const [stats, setStats] = useState<ReadingStats | null>(null)
+  const [bookMs, setBookMs] = useState<Record<string, number>>({})
   // Vocabulary notebook: words saved from the dictionary card while reading.
   const [vocab, setVocab] = useState<VocabWord[]>([])
   const [showVocab, setShowVocab] = useState(false)
@@ -130,6 +132,7 @@ export function Shelf({ onOpen }: ShelfProps) {
     setProgress(ps)
     void readingStats().then(setStats)
     void listVocab().then(setVocab)
+    void allBookTimes().then(setBookMs)
     // One badge for "you've marked this book up", bookmarks + highlights.
     const total: Record<string, number> = { ...bm }
     for (const [id, n] of Object.entries(hl)) total[id] = (total[id] ?? 0) + n
@@ -302,7 +305,12 @@ export function Shelf({ onOpen }: ShelfProps) {
     const base = `${Math.round(p.percent * 100)}% · ${unit} ${p.page} of ${b.pageCount}`
     const pace = loadPace(b.id)
     const left = paceReady(pace) ? timeLeft(pace, Math.max(0, 100 - p.percent * 100)) : null
-    return left ? `${base} · ~${left} left` : base
+    const ms = bookMs[b.id] ?? 0
+    const read = ms >= 30 * 60 * 1000 ? fmtLeft(ms) : null
+    let out = base
+    if (left) out += ` · ~${left} left`
+    if (read) out += ` · ${read} read`
+    return out
   }
 
   const toggleFinished = useCallback(

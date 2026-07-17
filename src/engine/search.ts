@@ -164,9 +164,29 @@ export async function getPageText(
   return pt
 }
 
-/** Case/whitespace-insensitive haystack for matching, same length as the source. */
-function normalize(s: string): string {
-  return s.toLowerCase().replace(/\s/g, ' ')
+/**
+ * Fold a string for matching: lowercase, whitespace unified, diacritics
+ * stripped ("café" matches "cafe" in either direction). Folding can change
+ * length (combining marks vanish), so the haystack fold carries an index
+ * map back to the original string — offsets into the source stay exact,
+ * which the highlight-rect math depends on. Ligatures are left alone (NFD
+ * doesn't split them); that matches the previous behavior.
+ */
+export function fold(s: string): { text: string; map: number[] } {
+  let text = ''
+  const map: number[] = []
+  for (let i = 0; i < s.length; i++) {
+    const c = /\s/.test(s[i]) ? ' ' : s[i].toLowerCase().normalize('NFD').replace(/\p{M}+/gu, '')
+    if (!c) continue // a bare combining mark folds away entirely
+    text += c
+    for (let k = 0; k < c.length; k++) map.push(i)
+  }
+  return { text, map }
+}
+
+/** Fold a needle (no map needed — only the haystack maps back). */
+function foldNeedle(s: string): string {
+  return fold(s).text
 }
 
 /** Snippet cosmetics: contents pages are mostly dot leaders, which read as noise. */
@@ -194,7 +214,7 @@ export async function* searchBook(
   cache: TextCache,
   opts: SearchOptions = {},
 ): AsyncGenerator<SearchHit> {
-  const needle = normalize(query.trim())
+  const needle = foldNeedle(query.trim())
   if (needle.length < 2) return
 
   const total = doc.numPages
@@ -214,17 +234,20 @@ export async function* searchBook(
     }
     opts.onProgress?.(i + 1, total)
 
-    const hay = normalize(pt.text)
-    let at = hay.indexOf(needle)
+    const hay = fold(pt.text)
+    let at = hay.text.indexOf(needle)
     while (at !== -1) {
+      // Map folded offsets back to the source string for slicing.
+      const s = hay.map[at]
+      const e = hay.map[at + needle.length - 1] + 1
       yield {
         page: no,
-        before: tidy(pt.text.slice(Math.max(0, at - 40), at)).trimStart(),
-        match: pt.text.slice(at, at + needle.length),
-        after: tidy(pt.text.slice(at + needle.length, at + needle.length + 60)).trimEnd(),
+        before: tidy(pt.text.slice(Math.max(0, s - 40), s)).trimStart(),
+        match: pt.text.slice(s, e),
+        after: tidy(pt.text.slice(e, e + 60)).trimEnd(),
       }
       if (++hits >= maxHits) return
-      at = hay.indexOf(needle, at + needle.length)
+      at = hay.text.indexOf(needle, at + needle.length)
       if (opts.aborted?.value) return
     }
     // Let the browser paint between pages; search must never freeze the reader.
@@ -245,14 +268,16 @@ export async function matchRectsOnPage(
   cssScale: number,
   crop?: CropBox | null,
 ): Promise<HighlightRect[]> {
-  const needle = normalize(query.trim())
+  const needle = foldNeedle(query.trim())
   if (needle.length < 2) return []
   const pt = await getPageText(page, cache)
-  const hay = normalize(pt.text)
+  const hay = fold(pt.text)
 
   const rects: HighlightRect[] = []
-  for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + needle.length)) {
-    rects.push(...rangeRects(page, pt, at, at + needle.length, cssScale, crop))
+  for (let at = hay.text.indexOf(needle); at !== -1; at = hay.text.indexOf(needle, at + needle.length)) {
+    const s = hay.map[at]
+    const e = hay.map[at + needle.length - 1] + 1
+    rects.push(...rangeRects(page, pt, s, e, cssScale, crop))
   }
   return rects
 }
