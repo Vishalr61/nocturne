@@ -99,6 +99,21 @@ with sync_playwright() as p:
     page.mouse.click(200, 800)
     time.sleep(0.8)
 
+    # --- 4b. internal links: tap a Contents-page link → chapter jump ---------
+    page.locator("input[aria-label='Page number']").fill("8")  # the Contents chapter
+    time.sleep(2)
+    links = page.locator("[data-epubchapter] [data-el]").count()
+    if links > 0:
+        page.locator("[data-epubchapter] [data-el]").nth(5).click()
+        time.sleep(1.5)
+        after = page.locator("input[aria-label='Page number']").input_value()
+        print("4b. internal links:", links, "| landed on chapter:", after,
+              "=>", "PASS" if after != "8" else "FAIL")
+        ok &= after != "8"
+    else:
+        print("4b. internal links: none found on Contents page => FAIL")
+        ok = False
+
     # --- 5. theme switch recolors --------------------------------------------
     if page.locator("button[aria-label='Reading settings']").count() == 0:
         page.mouse.click(195, 60)

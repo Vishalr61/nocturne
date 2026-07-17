@@ -17,6 +17,8 @@ interface EpubReaderProps {
   initialFrac?: number | null
   /** Reports the in-chapter fraction as the user scrolls (throttled). */
   onFrac?: (frac: number) => void
+  /** An internal link was tapped — the parent records it as a jump. */
+  onJump?: (chapter: number) => void
   fg: string
   bg: string
   fontPx: number
@@ -34,6 +36,7 @@ export function EpubReader({
   onChapter,
   initialFrac,
   onFrac,
+  onJump,
   fg,
   bg,
   fontPx,
@@ -52,6 +55,75 @@ export function EpubReader({
   const onFracRef = useRef(onFrac)
   onFracRef.current = onFrac
   const fracTimer = useRef<number | undefined>(undefined)
+  /** A tapped footnote, shown in place instead of jumping away. */
+  const [note, setNote] = useState<{ x: number; y: number; text: string } | null>(null)
+  const pendingFrag = useRef<string | null>(null)
+
+  // Scroll to a fragment target once its chapter has rendered.
+  useLayoutEffect(() => {
+    const frag = pendingFrag.current
+    if (!frag) return
+    pendingFrag.current = null
+    const scroller = scrollerRef.current
+    const el = scroller?.querySelector(`#${CSS.escape(frag)}`)
+    if (scroller && el instanceof HTMLElement) {
+      scroller.scrollTop = Math.max(0, el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 80)
+    }
+  }, [items])
+
+  // The footnote card dismisses on the next tap anywhere outside it.
+  useEffect(() => {
+    if (!note) return
+    const onDown = (e: PointerEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-epubnote]')) return
+      setNote(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [note])
+
+  /** Internal links: footnotes pop up in place; everything else jumps. */
+  const onLinkTap = useCallback(
+    (e: React.MouseEvent) => {
+      const link = (e.target as Element).closest?.('[data-el]')
+      if (!(link instanceof HTMLElement)) return false
+      e.stopPropagation()
+      const raw = link.dataset.el
+      const target = raw === 'same' ? reportedRef.current : Number(raw)
+      const frag = link.dataset.ef ?? null
+      if (link.dataset.note && frag) {
+        const text = epub.noteText(Number.isFinite(target) ? target : reportedRef.current, frag)
+        if (text) {
+          const r = link.getBoundingClientRect()
+          setNote({ x: r.left + r.width / 2, y: r.bottom, text })
+          return true
+        }
+      }
+      if (!Number.isFinite(target) || target < 0 || target >= epub.chapterCount) return true
+      pendingFrag.current = frag
+      if (items.includes(target)) {
+        const scroller = scrollerRef.current
+        const sec = scroller?.querySelector<HTMLElement>(`[data-epubchapter="${target}"]`)
+        if (scroller && sec) {
+          const el = frag ? sec.querySelector(`#${CSS.escape(frag)}`) : null
+          scroller.scrollTop =
+            el instanceof HTMLElement
+              ? Math.max(0, el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 80)
+              : sec.offsetTop
+          pendingFrag.current = null
+        }
+      } else {
+        reportedRef.current = target
+        setItems([target])
+        requestAnimationFrame(() => {
+          if (!pendingFrag.current && scrollerRef.current) scrollerRef.current.scrollTop = 0
+        })
+      }
+      onJump?.(target)
+      return true
+    },
+    [epub, items, onJump],
+  )
 
   // Load once per book, at the chapter you were on.
   useEffect(() => {
@@ -152,7 +224,8 @@ export function EpubReader({
       data-textreader
       className="nocturne-epub relative flex-1 overflow-y-auto overflow-x-hidden"
       style={{ background: bg, color: fg }}
-      onClick={() => {
+      onClick={(e) => {
+        if (onLinkTap(e)) return
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
         onToggleChrome()
@@ -185,6 +258,27 @@ export function EpubReader({
           {items.length && items[items.length - 1] >= epub.chapterCount - 1 ? 'End' : '···'}
         </div>
       </div>
+      {note && (
+        <div
+          data-epubnote
+          className="anim-fade fixed z-40 -translate-x-1/2"
+          style={{
+            left: Math.min(Math.max(note.x, 160), window.innerWidth - 160),
+            top: Math.min(note.y + 10, window.innerHeight - 220),
+          }}
+        >
+          <div
+            className="max-h-[38vh] w-[300px] max-w-[86vw] overflow-y-auto rounded-2xl border p-4 text-left text-[13px] leading-relaxed shadow-2xl backdrop-blur-xl"
+            style={{
+              background: `color-mix(in srgb, ${bg} 92%, ${fg} 5%)`,
+              color: fg,
+              borderColor: 'color-mix(in srgb, currentColor 18%, transparent)',
+            }}
+          >
+            {note.text}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

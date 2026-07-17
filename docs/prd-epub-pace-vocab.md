@@ -163,3 +163,21 @@ CSS; the trust problem does not exist.
   (compute once at import, store with the book, sync via knownBooks meta).
 - **Scrubber granularity** on 5-chapter books: intra-chapter fraction keeps
   it smooth.
+
+
+---
+
+## Post-ship addenda (2026-07-17, review round)
+
+- **Internal links & footnotes** (shipped): sanitized `<a>` targets resolve
+  to chapter+fragment (`data-el`/`data-ef`); fragment ids, lang, and dir
+  survive sanitization; noterefs (`epub:type`/`role` doc-noteref) pop the
+  note text up in place instead of jumping away; other internal links jump
+  (and record the back-pill). External URLs stay flattened to text.
+- **Highlight anchoring (when EPUB highlights land)**: anchor to
+  block-index + character-offset into that block's textContent of the
+  SANITIZED chapter, and version the scheme — sanitizer changes can drift
+  old anchors, and that must be a chosen tradeoff, not a surprise.
+- **Reader.tsx decomposition**: deliberately deferred to its own PR — a
+  shared reader shell + per-format capabilities descriptor, done cold with
+  the verification suites as the net, not stapled to feature work.
