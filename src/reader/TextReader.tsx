@@ -4,7 +4,7 @@ import { getPageText, type TextCache } from '../engine/search'
 import { reconstructPageScored, stitch, spansText, type Block, type ImageBlock, type Span } from '../engine/reflow'
 import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
-import { classifyPage, type PageClassification } from '../engine/classify'
+import { classifyPage, type PageClassification, type Rect } from '../engine/classify'
 import type { Theme } from '../engine/theme'
 
 // Text Mode: the reflow reader. Instead of showing the page image, it extracts
@@ -100,6 +100,11 @@ export function TextReader({
   const itemsRef = useRef<Item[]>([])
   itemsRef.current = items
   const [empty, setEmpty] = useState(false)
+  // Spot-check peek: long-press a paragraph to see the source page region it
+  // was reconstructed from. Reflow heuristics fail silently; trust is built by
+  // letting you verify cheaply.
+  const [peek, setPeek] = useState<{ page: number; rect: Rect } | null>(null)
+  const suppressClickRef = useRef(false)
   const loadingRef = useRef(false)
   const anchorRef = useRef<number | null>(null) // scrollHeight before a prepend
   const reportedRef = useRef(startPage)
@@ -201,6 +206,102 @@ export function TextReader({
       }),
     [theme, imageDim, withRenderLock],
   )
+
+  // Render the recolored source region a reflowed block came from, with a
+  // little surrounding context — the spot-check peek. Same render + crop path
+  // as inline images, so the region looks exactly as Faithful mode shows it.
+  const renderPeek = useCallback(
+    (pageNo: number, rect: Rect): Promise<HTMLCanvasElement | null> =>
+      withRenderLock(async () => {
+        const recolor = recolorRef.current
+        if (!recolor) return null
+        const pdfPage = await doc.getPage(pageNo)
+        const vp = pdfPage.getViewport({ scale: 1 })
+        const dpr = Math.min(window.devicePixelRatio || 1, 3)
+        await renderDarkPage(pdfPage, IMG_RENDER_W / vp.width, dpr, recolor, {
+          theme,
+          satCut: SAT_CUT,
+          imageDim,
+          sourceCanvas: imgSrcRef.current ?? undefined,
+        })
+        const gl = glRef.current!
+        const view = pdfPage.view // [x0, y0, x1, y1], PDF user space, y up
+        const viewW = view[2] - view[0]
+        const viewH = view[3] - view[1]
+        // Pad so the block reads in context (a line above and below, margins).
+        const padX = viewW * 0.06
+        const padY = Math.min(rect.h * 0.4 + viewH * 0.005, viewH * 0.06)
+        const rx0 = Math.max(view[0], rect.x - padX)
+        const ry0 = Math.max(view[1], rect.y - padY)
+        const rx1 = Math.min(view[2], rect.x + rect.w + padX)
+        const ry1 = Math.min(view[3], rect.y + rect.h + padY)
+        const sx = ((rx0 - view[0]) / viewW) * gl.width
+        const sy = ((view[3] - ry1) / viewH) * gl.height
+        const sw = ((rx1 - rx0) / viewW) * gl.width
+        const sh = ((ry1 - ry0) / viewH) * gl.height
+        const c = document.createElement('canvas')
+        c.width = Math.max(1, Math.round(sw))
+        c.height = Math.max(1, Math.round(sh))
+        c.getContext('2d')!.drawImage(gl, sx, sy, sw, sh, 0, 0, c.width, c.height)
+        return c
+      }),
+    [doc, theme, imageDim, withRenderLock],
+  )
+
+  // Long-press a paragraph → peek. One delegated listener; blocks carry their
+  // index in data-blk and their section carries the page, so the press maps
+  // back to the block's srcRect without a closure per paragraph. Movement or a
+  // second finger (the font pinch) cancels; firing clears any native selection
+  // the hold may have started and swallows the follow-up click so the chrome
+  // doesn't toggle underneath the peek.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    let timer: number | undefined
+    let x0 = 0
+    let y0 = 0
+    let pointerId: number | null = null
+    const cancel = () => {
+      window.clearTimeout(timer)
+      timer = undefined
+      pointerId = null
+    }
+    const onDown = (e: PointerEvent) => {
+      if (pointerId !== null) return cancel() // second finger: it's a pinch
+      const el = (e.target as Element | null)?.closest?.('p[data-blk], h2[data-blk]')
+      if (!el) return
+      pointerId = e.pointerId
+      x0 = e.clientX
+      y0 = e.clientY
+      timer = window.setTimeout(() => {
+        pointerId = null
+        const sec = el.closest<HTMLElement>('[data-textpage]')
+        const page = Number(sec?.dataset.textpage)
+        const it = itemsRef.current.find((x) => x.page === page)
+        const b = it?.kind === 'text' ? it.blocks[Number((el as HTMLElement).dataset.blk)] : null
+        if (!b || (b.kind !== 'p' && b.kind !== 'h') || !b.srcRect) return
+        window.getSelection()?.removeAllRanges()
+        suppressClickRef.current = true
+        setPeek({ page, rect: b.srcRect })
+      }, 450)
+    }
+    const onMove = (e: PointerEvent) => {
+      if (pointerId !== e.pointerId) return
+      if (Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel()
+    }
+    const onUp = () => cancel()
+    scroller.addEventListener('pointerdown', onDown)
+    scroller.addEventListener('pointermove', onMove)
+    scroller.addEventListener('pointerup', onUp)
+    scroller.addEventListener('pointercancel', onUp)
+    return () => {
+      cancel()
+      scroller.removeEventListener('pointerdown', onDown)
+      scroller.removeEventListener('pointermove', onMove)
+      scroller.removeEventListener('pointerup', onUp)
+      scroller.removeEventListener('pointercancel', onUp)
+    }
+  }, [])
 
   // Decide per page: reflow prose, but render image-heavy or near-textless pages
   // (cover, title pages, full-page figures, scans) as their recolored image.
@@ -376,6 +477,16 @@ export function TextReader({
     }
   }, [items])
 
+  // A short page (the cover, a bare divider) can leave the column shorter than
+  // the viewport — with nothing to scroll, the scroll handler would never fire
+  // and the reader would be stuck on one page. Keep loading forward until the
+  // column overflows.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller || !items.length) return
+    if (scroller.scrollHeight <= scroller.clientHeight + 200) void extend(1)
+  }, [items, extend])
+
   const onScroll = useCallback(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
@@ -468,7 +579,12 @@ export function TextReader({
       style={{ background: bg, color: fg }}
       onClick={() => {
         // One tap anywhere toggles the chrome, both directions; the click that
-        // ends a text selection is the one exception.
+        // ends a text selection is one exception, the click that released a
+        // long-press peek is the other.
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false
+          return
+        }
         const s = window.getSelection()
         if (s && !s.isCollapsed) return
         onToggleChrome()
@@ -514,6 +630,7 @@ export function TextReader({
                 return (
                   <h2
                     key={i}
+                    data-blk={i}
                     className={marker ? 'mb-6 mt-12 opacity-80' : 'mb-4 mt-9 font-semibold'}
                     style={{
                       fontSize: marker ? '1.5em' : '1.3em',
@@ -532,6 +649,7 @@ export function TextReader({
               return (
                 <p
                   key={i}
+                  data-blk={i}
                   className={opensChapter ? 'nocturne-dropcap' : undefined}
                   style={{
                     textWrap: 'pretty',
@@ -552,6 +670,79 @@ export function TextReader({
             {items[items.length - 1].page >= pageCount ? 'End' : 'Loading…'}
           </div>
         )}
+      </div>
+      {peek && (
+        <PeekOverlay
+          page={peek.page}
+          rect={peek.rect}
+          render={renderPeek}
+          fg={fg}
+          bg={bg}
+          onClose={() => setPeek(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** The spot-check peek: the recolored source region a long-pressed paragraph
+ *  was reconstructed from, floating over the column. Tap anywhere to dismiss. */
+function PeekOverlay({
+  page,
+  rect,
+  render,
+  fg,
+  bg,
+  onClose,
+}: {
+  page: number
+  rect: Rect
+  render: (page: number, rect: Rect) => Promise<HTMLCanvasElement | null>
+  fg: string
+  bg: string
+  onClose: () => void
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void render(page, rect).then((canvas) => {
+      if (!alive || !canvas) return
+      const host = hostRef.current
+      if (!host) return
+      canvas.style.width = '100%'
+      canvas.style.height = 'auto'
+      canvas.style.display = 'block'
+      host.replaceChildren(canvas)
+      setReady(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [page, rect, render])
+  return (
+    <div
+      data-peek
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClose()
+      }}
+    >
+      <div
+        className="w-full max-w-xl overflow-hidden rounded-2xl shadow-2xl"
+        style={{ background: bg, color: fg }}
+      >
+        <div className="flex items-baseline justify-between px-4 pb-2 pt-3 text-[11px] uppercase tracking-[0.14em] opacity-70">
+          <span>Original — page {page}</span>
+          <span className="normal-case tracking-normal opacity-70">tap to close</span>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto">
+          {/* leaf node for the imperative canvas — React never adds children
+              here, so swapping it can't collide with reconciliation */}
+          <div ref={hostRef} />
+          {!ready && <div className="py-10 text-center text-xs opacity-40">Loading…</div>}
+        </div>
       </div>
     </div>
   )

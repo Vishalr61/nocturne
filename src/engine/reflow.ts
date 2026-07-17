@@ -24,6 +24,10 @@ export interface TextBlock {
   openEnd?: boolean
   /** Paragraph likely continues from the previous page. */
   openStart?: boolean
+  /** Where this block's lines sat on the source page (PDF user space, same
+   *  space as classify's imageRects). A stitched paragraph keeps the rect of
+   *  its first page's lines — the peek shows where the paragraph starts. */
+  srcRect?: Rect
 }
 
 /** An illustration kept in the flow at its original vertical position. The rect
@@ -143,6 +147,17 @@ function toLines(runs: Run[]): Line[] {
   }
   flush()
   return lines.filter((l) => l.text.length > 0)
+}
+
+/** Bounding box of a block's lines in PDF user space (y up). Line `y` is the
+ *  baseline, so the box stretches one em above the top baseline for ascenders
+ *  and a third of an em below the bottom one for descenders. */
+function linesRect(ls: Line[]): Rect {
+  const x0 = Math.min(...ls.map((l) => l.x0))
+  const x1 = Math.max(...ls.map((l) => l.x1))
+  const yTop = Math.max(...ls.map((l) => l.y + l.size))
+  const yBot = Math.min(...ls.map((l) => l.y - l.size * 0.35))
+  return { x: x0, y: yBot, w: x1 - x0, h: yTop - yBot }
 }
 
 function median(nums: number[]): number {
@@ -287,6 +302,7 @@ export function reconstructPageScored(
       spans: trimmed,
       openEnd: para[para.length - 1].x1 > rightEdge - bodySize * 2 && !SENTENCE_END.test(plain),
       openStart: /^[a-z]/.test(plain),
+      srcRect: linesRect(para),
     })
     para = []
   }
@@ -323,7 +339,7 @@ export function reconstructPageScored(
       (line.text.length <= 24 && CHAPTER_MARKER.test(line.text.trim()))
     if (heading) {
       pushPara()
-      blocks.push({ kind: 'h', spans: line.segs.map((s) => ({ ...s })) })
+      blocks.push({ kind: 'h', spans: line.segs.map((s) => ({ ...s })), srcRect: linesRect([line]) })
       continue
     }
     if (i > 0 && para.length) {
