@@ -28,7 +28,7 @@ import {
   type TextCache,
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
-import { lookupWord, type DictResult } from '../engine/dict'
+import { lookupWord, lookupOnline, type DictResult } from '../engine/dict'
 import { openEpub, looksLikeEpub, type EpubDoc } from '../engine/epub'
 import { loadPace, recordPace, timeLeft, paceReady } from '../engine/pace'
 import { EpubReader } from './EpubReader'
@@ -162,6 +162,7 @@ const POS_LABEL = {
   d: 'det.',
   p: 'prep.',
   c: 'conj.',
+  i: 'interj.',
 } as const
 
 /** Expand the caret position at a screen point into the word around it. */
@@ -504,6 +505,12 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [textPara, setTextPara] = useState<ParaStyle>(() =>
     comfortStr('nocturne-textpara', 'indent') === 'spaced' ? 'spaced' : 'indent',
   )
+  /** OPT-IN online dictionary fallback (Wiktionary) for words the offline
+   *  shards miss. Off by default: enabling it means each MISSED word is sent
+   *  to Wiktionary — the one crack in local-first, chosen by the user. */
+  const [dictOnline, setDictOnline] = useState(() => comfortBool('nocturne-dict-online', false))
+  const dictOnlineRef = useRef(dictOnline)
+  dictOnlineRef.current = dictOnline
   const [spread, setSpread] = useState(true)
   const [landscape, setLandscape] = useState(
     typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
@@ -1152,10 +1159,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textwidth', String(textWidth))
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
+      localStorage.setItem('nocturne-dict-online', dictOnline ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara])
+  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara, dictOnline])
 
   // Reading stats: time is the gap between page arrivals (capped, so a
   // put-down phone doesn't count the night), pages are forward movement
@@ -1717,8 +1725,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       saved: false,
       res: 'loading',
     })
-    void lookupWord(hit.word).then((res) => {
-      setDefCard((cur) => (cur && cur.word === hit.word ? { ...cur, res: res ?? 'none' } : cur))
+    void lookupWord(hit.word).then(async (res) => {
+      // Offline miss + the user opted into the online fallback: try Wiktionary
+      // (this is the only path that sends the word anywhere).
+      const final = res ?? (dictOnlineRef.current ? await lookupOnline(hit.word) : null)
+      setDefCard((cur) => (cur && cur.word === hit.word ? { ...cur, res: final ?? 'none' } : cur))
     })
     return true
   }, [])
@@ -2596,6 +2607,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                         from “{defCard.word}”
                       </span>
                     )}
+                    {defCard.res.source === 'wiktionary' && (
+                      <span className="ml-2 text-[10px] font-sans font-normal uppercase tracking-wide text-ink-faint">
+                        Wiktionary
+                      </span>
+                    )}
                   </p>
                   <button
                     className={`flex-none rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
@@ -2779,6 +2795,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     on={textPara === 'indent'}
                     onTap={() => setTextPara(textPara === 'indent' ? 'spaced' : 'indent')}
                   />
+                  <Tile icon="@" label="Web defs" on={dictOnline} onTap={() => setDictOnline(!dictOnline)} />
                   <Tile icon="≣" label="Justify" on={textJustify} onTap={() => setTextJustify(!textJustify)} />
                   {'speechSynthesis' in window && !epubDoc && (
                     <Tile
@@ -2799,6 +2816,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   {cropBox && (
                     <Tile icon="◱" label="Crop" on={cropMargins} onTap={() => setCropMargins(!cropMargins)} />
                   )}
+                  <Tile icon="@" label="Web defs" on={dictOnline} onTap={() => setDictOnline(!dictOnline)} />
                   {'speechSynthesis' in window && (
                     <Tile
                       icon={reading ? '◼' : '▶'}
