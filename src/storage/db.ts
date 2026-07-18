@@ -137,10 +137,14 @@ export interface SyncState {
   lastSyncAt?: number
 }
 
-/** Total active reading time per book — local, never synced. */
+/** Total active reading time per book — local, never synced. Carries the
+ *  book's reading dates too: startedAt is stamped by the first credited
+ *  minute, finishedAt by marking the book finished. */
 export interface BookTime {
   bookId: string
   ms: number
+  startedAt?: number
+  finishedAt?: number
 }
 
 /** A word saved from the dictionary card — the reading-as-learning trail.
@@ -282,7 +286,12 @@ export async function logReading(ms: number, pages: number, bookId?: string): Pr
     await db.readingLog.put({ day, ms: (row?.ms ?? 0) + ms, pages: (row?.pages ?? 0) + pages })
     if (bookId && ms > 0) {
       const bt = await db.bookTime.get(bookId)
-      await db.bookTime.put({ bookId, ms: (bt?.ms ?? 0) + ms })
+      await db.bookTime.put({
+        ...bt,
+        bookId,
+        ms: (bt?.ms ?? 0) + ms,
+        startedAt: bt?.startedAt ?? Date.now(),
+      })
     }
   })
 }
@@ -295,6 +304,60 @@ export async function bookReadingMs(bookId: string): Promise<number> {
 export async function allBookTimes(): Promise<Record<string, number>> {
   const rows = await db.bookTime.toArray()
   return Object.fromEntries(rows.map((r) => [r.bookId, r.ms]))
+}
+
+/** Minutes read on each of the last `n` days, oldest first, gaps as 0 —
+ *  the stats sheet's bar chart. */
+export async function readingDays(n: number): Promise<{ day: string; min: number }[]> {
+  const rows = await db.readingLog.toArray()
+  const byDay = new Map(rows.map((r) => [r.day, r.ms]))
+  const out: { day: string; min: number }[] = []
+  const today = new Date()
+  for (let back = n - 1; back >= 0; back--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - back)
+    const day = localDay(d)
+    out.push({ day, min: Math.round((byDay.get(day) ?? 0) / 60000) })
+  }
+  return out
+}
+
+export interface BookHistoryRow {
+  bookId: string
+  title: string
+  ms: number
+  startedAt?: number
+  finishedAt?: number
+  finished: boolean
+  /** The book file is gone from this device (ghost) but its history remains. */
+  ghost: boolean
+}
+
+/** Every book with reading history (time logged or marked finished), the
+ *  most recently active first — the "books you've read" timeline. */
+export async function bookHistory(): Promise<BookHistoryRow[]> {
+  const [times, books, ghosts, prog] = await Promise.all([
+    db.bookTime.toArray(),
+    db.books.toArray(),
+    db.knownBooks.toArray(),
+    db.progress.toArray(),
+  ])
+  const titleOf = new Map<string, string>()
+  for (const g of ghosts) titleOf.set(g.bookId, g.title)
+  for (const b of books) titleOf.set(b.id, b.title)
+  const finished = new Set(prog.filter((p) => p.finished).map((p) => p.bookId))
+  return times
+    .filter((t) => (t.ms > 0 || finished.has(t.bookId)) && titleOf.has(t.bookId))
+    .map((t) => ({
+      bookId: t.bookId,
+      title: titleOf.get(t.bookId)!,
+      ms: t.ms,
+      startedAt: t.startedAt,
+      finishedAt: t.finishedAt,
+      finished: finished.has(t.bookId),
+      ghost: !books.some((b) => b.id === t.bookId),
+    }))
+    .sort((a, b) => (b.finishedAt ?? b.startedAt ?? 0) - (a.finishedAt ?? a.startedAt ?? 0))
 }
 
 export interface ReadingStats {
@@ -541,7 +604,8 @@ export async function getProgress(bookId: string): Promise<Progress | undefined>
 }
 
 /** Mark a book finished (or un-finish it). Creates a progress row if the book
- *  was never opened; bumps updatedAt so sync carries it. */
+ *  was never opened; bumps updatedAt so sync carries it. The finish DATE is
+ *  local color, not synced state — it lands on bookTime. */
 export async function setBookFinished(bookId: string, finished: boolean): Promise<void> {
   const cur = await db.progress.get(bookId)
   await db.progress.put({
@@ -551,6 +615,13 @@ export async function setBookFinished(bookId: string, finished: boolean): Promis
     offset: cur?.offset,
     finished,
     updatedAt: Date.now(),
+  })
+  const bt = await db.bookTime.get(bookId)
+  await db.bookTime.put({
+    ...bt,
+    bookId,
+    ms: bt?.ms ?? 0,
+    finishedAt: finished ? (bt?.finishedAt ?? Date.now()) : undefined,
   })
 }
 
