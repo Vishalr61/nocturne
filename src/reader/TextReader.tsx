@@ -616,9 +616,10 @@ export function TextReader({
                 return crop ? <InlineImage key={i} crop={crop} /> : null
               }
               if (b.kind === 'sep') {
-                // A scene break: quiet, centered, unmistakably deliberate.
+                // A scene break: quiet, centered, unmistakably deliberate —
+                // with real air around it, so the pause is felt, not skimmed.
                 return (
-                  <div key={i} aria-hidden className="my-8 text-center opacity-50" style={{ letterSpacing: '0.6em' }}>
+                  <div key={i} aria-hidden className="my-14 text-center opacity-50" style={{ letterSpacing: '0.6em' }}>
                     * * *
                   </div>
                 )
@@ -631,26 +632,42 @@ export function TextReader({
                   <h2
                     key={i}
                     data-blk={i}
-                    className={marker ? 'mb-6 mt-12 opacity-80' : 'mb-4 mt-9 font-semibold'}
+                    className={marker ? 'opacity-80' : 'mb-4 mt-9 font-semibold'}
                     style={{
                       fontSize: marker ? '1.5em' : '1.3em',
                       lineHeight: 1.2,
                       fontFamily,
                       textAlign: marker ? 'center' : 'left',
+                      // A chapter opens like a print chapter page: the run-out
+                      // above ends the old chapter, the marker sits in blank
+                      // space, and the prose starts well below it. (vh-based,
+                      // so the gap scales with the screen, capped for desktop.)
+                      ...(marker
+                        ? {
+                            marginTop: 'min(34vh, 300px)',
+                            marginBottom: 'min(9vh, 90px)',
+                          }
+                        : undefined),
                     }}
                   >
                     {renderSpans(b.spans)}
                   </h2>
                 )
               }
-              // A drop cap opens each chapter (the paragraph right after a heading).
-              const opensChapter = i > 0 && it.blocks[i - 1].kind === 'h'
+              // A drop cap + small-caps first line open each chapter — the
+              // first PROSE after a heading, looking past a chapter-divider
+              // illustration or scene break sitting between them (DCC's cat).
+              let back = i - 1
+              while (back >= 0 && (it.blocks[back].kind === 'img' || it.blocks[back].kind === 'sep')) {
+                back--
+              }
+              const opensChapter = back >= 0 && it.blocks[back].kind === 'h'
               const indent = paraStyle === 'indent' && !opensChapter && !b.openStart
               return (
                 <p
                   key={i}
                   data-blk={i}
-                  className={opensChapter ? 'nocturne-dropcap' : undefined}
+                  className={opensChapter ? 'nocturne-dropcap nocturne-chapteropen' : undefined}
                   style={{
                     textWrap: 'pretty',
                     overflowWrap: 'break-word',

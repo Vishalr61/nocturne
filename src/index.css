@@ -139,6 +139,13 @@ body {
   font-weight: 600;
 }
 
+/* Text Mode chapter opening line — the classic print pairing with a drop cap:
+   the first line runs in spaced small caps, easing the eye into the chapter. */
+.nocturne-chapteropen::first-line {
+  font-variant-caps: small-caps;
+  letter-spacing: 0.045em;
+}
+
 /* Warm scrollbars (desktop). */
 ::-webkit-scrollbar {
   width: 10px;
