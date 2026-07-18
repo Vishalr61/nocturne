@@ -22,6 +22,20 @@ import '@fontsource/atkinson-hyperlegible/400-italic.css'
 import '@fontsource/atkinson-hyperlegible/700.css'
 import '@fontsource/opendyslexic/400.css'
 import '@fontsource/opendyslexic/700.css'
+// Second wave of reading faces (latin subset only — regular, italic, bold —
+// so four more fonts cost ~400KB of precache, not megabytes).
+import '@fontsource/eb-garamond/latin-400.css'
+import '@fontsource/eb-garamond/latin-400-italic.css'
+import '@fontsource/eb-garamond/latin-700.css'
+import '@fontsource/vollkorn/latin-400.css'
+import '@fontsource/vollkorn/latin-400-italic.css'
+import '@fontsource/vollkorn/latin-700.css'
+import '@fontsource/crimson-pro/latin-400.css'
+import '@fontsource/crimson-pro/latin-400-italic.css'
+import '@fontsource/crimson-pro/latin-700.css'
+import '@fontsource/bitter/latin-400.css'
+import '@fontsource/bitter/latin-400-italic.css'
+import '@fontsource/bitter/latin-700.css'
 import './index.css'
 
 // Dev-only point-and-suggest overlay (see src/dev/suggest.ts). The DEV guard

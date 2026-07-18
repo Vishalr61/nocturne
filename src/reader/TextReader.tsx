@@ -26,6 +26,10 @@ export const TEXT_FONTS: TextFontDef[] = [
   { id: 'lora', name: 'Lora', stack: "'Lora', Georgia, serif", serif: true },
   { id: 'literata', name: 'Literata', stack: "'Literata', Georgia, serif", serif: true },
   { id: 'merriweather', name: 'Merriweather', stack: "'Merriweather', Georgia, serif", serif: true },
+  { id: 'garamond', name: 'EB Garamond', stack: "'EB Garamond', Georgia, serif", serif: true },
+  { id: 'vollkorn', name: 'Vollkorn', stack: "'Vollkorn', Georgia, serif", serif: true },
+  { id: 'crimson', name: 'Crimson Pro', stack: "'Crimson Pro', Georgia, serif", serif: true },
+  { id: 'bitter', name: 'Bitter', stack: "'Bitter', Georgia, serif", serif: true },
   { id: 'inter', name: 'Inter', stack: "'Inter', system-ui, sans-serif", serif: false },
   {
     id: 'atkinson',
