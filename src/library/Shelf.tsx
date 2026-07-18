@@ -35,6 +35,7 @@ import {
 } from '../storage/syncClient'
 import { importBook } from './import'
 import { loadPace, timeLeft, paceReady, fmtLeft } from '../engine/pace'
+import { buzz } from '../engine/haptics'
 
 /** Chromium's beforeinstallprompt event (not in the TS DOM lib). */
 interface InstallPromptEvent extends Event {
@@ -315,7 +316,9 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   const toggleFinished = useCallback(
     async (b: Book) => {
-      await setBookFinished(b.id, !progress[b.id]?.finished)
+      const finishing = !progress[b.id]?.finished
+      await setBookFinished(b.id, finishing)
+      if (finishing) buzz(12) // closing a book deserves a tick
       await refresh()
     },
     [progress, refresh],
@@ -404,25 +407,32 @@ export function Shelf({ onOpen }: ShelfProps) {
                   className="mx-auto flex w-full max-w-md flex-col items-center pt-2 text-center"
                   onClick={() => onOpen(hero.id)}
                 >
-                  <div
-                    className="aspect-[3/4] flex-none overflow-hidden rounded-2xl"
-                    style={{
-                      width: 'clamp(140px,17vw,190px)',
-                      boxShadow:
-                        '0 34px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,0.07)',
-                    }}
-                  >
-                    {hero.thumb ? (
-                      <img src={hero.thumb} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div
-                        className="flex h-full w-full flex-col justify-end p-4"
-                        style={{ background: coverGradient(hero.id) }}
-                      >
-                        <div className="font-serif text-lg font-medium leading-tight text-ink-shelf">
-                          {hero.title}
+                  <div className="relative flex-none">
+                    <div
+                      className="aspect-[3/4] overflow-hidden rounded-2xl"
+                      style={{
+                        width: 'clamp(140px,17vw,190px)',
+                        boxShadow:
+                          '0 34px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,0.07)',
+                      }}
+                    >
+                      {hero.thumb ? (
+                        <img src={hero.thumb} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div
+                          className="flex h-full w-full flex-col justify-end p-4"
+                          style={{ background: coverGradient(hero.id) }}
+                        >
+                          <div className="font-serif text-lg font-medium leading-tight text-ink-shelf">
+                            {hero.title}
+                          </div>
                         </div>
-                      </div>
+                      )}
+                    </div>
+                    {(progress[hero.id]?.percent ?? 0) > 0 && (
+                      <ProgressRing
+                        pct={progress[hero.id]?.finished ? 1 : (progress[hero.id]?.percent ?? 0)}
+                      />
                     )}
                   </div>
                   <div
@@ -432,14 +442,6 @@ export function Shelf({ onOpen }: ShelfProps) {
                     {hero.title}
                   </div>
                   <div className="mt-1.5 text-[13px] text-ink-mid">{meta(hero)}</div>
-                  <div className="mt-2 flex w-full max-w-[280px] items-center">
-                    <div className="h-[3px] flex-1 overflow-hidden rounded bg-white/10">
-                      <div
-                        className="h-full bg-gradient-to-r from-accent to-accent-hi"
-                        style={{ width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
                   <span className="mt-5 inline-block rounded-full bg-accent px-8 py-2.5 text-sm font-semibold text-accent-on shadow-lg">
                     Resume reading
                   </span>
@@ -970,6 +972,48 @@ export function Shelf({ onOpen }: ShelfProps) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** A small progress ring on the hero cover's corner that draws itself in on
+ *  arrival — the shelf's one moment of motion. Percent sits in the middle. */
+function ProgressRing({ pct }: { pct: number }) {
+  const [drawn, setDrawn] = useState(0)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setDrawn(pct))
+    return () => cancelAnimationFrame(id)
+  }, [pct])
+  const r = 19
+  const c = 2 * Math.PI * r
+  return (
+    <div
+      className="absolute -bottom-3 -right-3 grid h-12 w-12 place-items-center rounded-full"
+      style={{
+        background: 'rgba(10,8,5,0.78)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        boxShadow: '0 6px 16px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08)',
+      }}
+    >
+      <svg width="48" height="48" className="-rotate-90">
+        <circle cx="24" cy="24" r={r} fill="none" stroke="rgba(255,255,255,0.13)" strokeWidth="3.5" />
+        <circle
+          cx="24"
+          cy="24"
+          r={r}
+          fill="none"
+          stroke="rgb(var(--accent-rgb))"
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - drawn)}
+          style={{ transition: 'stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1)' }}
+        />
+      </svg>
+      <span className="absolute text-[10px] font-semibold tabular-nums text-white/90">
+        {Math.round(pct * 100)}%
+      </span>
     </div>
   )
 }

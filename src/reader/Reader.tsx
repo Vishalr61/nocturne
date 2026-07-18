@@ -29,6 +29,7 @@ import {
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
 import { lookupWord, lookupOnline, type DictResult } from '../engine/dict'
+import { buzz } from '../engine/haptics'
 import { openEpub, looksLikeEpub, type EpubDoc } from '../engine/epub'
 import { loadPace, recordPace, timeLeft, paceReady } from '../engine/pace'
 import { EpubReader } from './EpubReader'
@@ -511,6 +512,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [dictOnline, setDictOnline] = useState(() => comfortBool('nocturne-dict-online', false))
   const dictOnlineRef = useRef(dictOnline)
   dictOnlineRef.current = dictOnline
+  /** Transient chapter-title toast when scrolling crosses into a new chapter. */
+  const [chapterToast, setChapterToast] = useState<string | null>(null)
+  const prevChapterRef = useRef<string | null | undefined>(undefined)
   const [spread, setSpread] = useState(true)
   const [landscape, setLandscape] = useState(
     typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
@@ -1064,13 +1068,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       // means panning every page for no size gain. Haptic tick on the snap
       // (Android; iOS Safari has no vibration API).
       if (Math.abs(next - 1) < 0.12) {
-        if (Math.abs(next - 1) > 0.001 && Math.abs(1 - zoom) >= 0.02) {
-          try {
-            navigator.vibrate?.(10)
-          } catch {
-            /* no haptics on this platform */
-          }
-        }
+        if (Math.abs(next - 1) > 0.001 && Math.abs(1 - zoom) >= 0.02) buzz()
         next = 1
       }
       const commit = {
@@ -1148,6 +1146,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     },
     [pageCount, tick],
   )
+
+  // Scroll mode's page boundaries slide by without ceremony, so crossing into
+  // a new chapter gets a quiet toast (title + a haptic tick). The first sample
+  // after load/mode-switch only primes the ref — arriving isn't crossing. The
+  // dismiss timer lives in a ref: an effect-cleanup timer would be cancelled
+  // by the very next page tick and leave the toast stuck.
+  const toastTimerRef = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (viewMode !== 'scroll' || epubDoc || !toc.length) {
+      prevChapterRef.current = undefined
+      return
+    }
+    let cur: { title: string; page: number } | null = null
+    for (const t of toc) if (t.page <= page && (!cur || t.page >= cur.page)) cur = t
+    const key = cur?.title ?? null
+    const prev = prevChapterRef.current
+    prevChapterRef.current = key
+    if (prev === undefined || prev === key || !key) return
+    setChapterToast(key)
+    buzz(8)
+    window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => setChapterToast(null), 2200)
+  }, [page, viewMode, epubDoc, toc])
 
   // Persist comfort prefs.
   useEffect(() => {
@@ -1573,7 +1594,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const id = loadedIdRef.current
     if (!id) return
     if (bookmarks.some((b) => b.page === page)) await removeBookmark(id, page)
-    else await addBookmark(id, page)
+    else {
+      await addBookmark(id, page)
+      buzz()
+    }
     setBookmarks(await listBookmarks(id))
   }, [bookmarks, page])
 
@@ -2551,6 +2575,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         </div>
       )}
 
+      {chapterToast && (
+        <div
+          className="anim-fade pointer-events-none fixed left-1/2 z-40 -translate-x-1/2 rounded-full border border-line bg-panel/90 px-4 py-1.5 font-serif text-[13px] backdrop-blur-md"
+          style={{ top: 'max(18px, env(safe-area-inset-top))', color: rgbCss(theme.fg) }}
+        >
+          {chapterToast}
+        </div>
+      )}
+
       {/* Definition card: pinned to the double-tapped word, dismissed by the
           next tap anywhere else. */}
       {defCard && (
@@ -2634,6 +2667,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                         context: defCard.context,
                       })
                       setDefCard((c) => (c ? { ...c, saved: true } : c))
+                      buzz()
                     }}
                   >
                     {defCard.saved ? '✓ Saved' : '＋ Save'}

@@ -4,6 +4,7 @@ import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
+import { buzz } from '../engine/haptics'
 import type { Theme } from '../engine/theme'
 import { tintOf, type Highlight } from '../storage/db'
 import { TextLayer, type TextSelection } from './TextLayer'
@@ -338,13 +339,7 @@ export function ContinuousReader({
       let next = startZoom * f
       for (const d of detentsRef.current) {
         if (Math.abs(next - d) / d < 0.12) {
-          if (Math.abs(next - d) > 0.001 && Math.abs(d - zoom) >= 0.02) {
-            try {
-              navigator.vibrate?.(10)
-            } catch {
-              /* no haptics on this platform */
-            }
-          }
+          if (Math.abs(next - d) > 0.001 && Math.abs(d - zoom) >= 0.02) buzz()
           next = d
           break
         }
