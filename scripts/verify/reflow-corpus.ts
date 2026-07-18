@@ -33,7 +33,7 @@ const BASELINE = join(dirname(fileURLToPath(import.meta.url)), 'reflow-baseline.
 
 /** stride: score every Nth page — Sybex is 1700+ pages of mostly tables. */
 const CORPUS: { name: string; path: string; stride: number }[] = [
-  { name: 'dcc', path: join(HOME, 'Documents/Hobby/Books/Dungeon Crawler Carl.pdf'), stride: 1 },
+  { name: 'dcc', path: join(HOME, 'Documents/Hobby/Books/DCC/DungeonCrawlerCarl.pdf'), stride: 1 },
   { name: 'red-rising', path: join(HOME, 'Documents/Hobby/Books/Red Rising/red-rising.pdf'), stride: 1 },
   { name: 'enders-game', path: join(HOME, 'Documents/Hobby/Books/enders_game_-_full_novel.pdf'), stride: 1 },
   { name: 'sybex', path: join(HOME, 'Documents/CompTIA/SybexCompTIA.pdf'), stride: 5 },

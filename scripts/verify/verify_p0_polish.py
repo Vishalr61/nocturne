@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 
 CHROME = str(next(Path.home().glob(
     "Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell")))
-PDF = str(Path.home() / "Documents/Hobby/Books/Dungeon Crawler Carl.pdf")
+PDF = str(Path.home() / "Documents/Hobby/Books/DCC/DungeonCrawlerCarl.pdf")
 
 def open_settings(page):
     for _ in range(4):

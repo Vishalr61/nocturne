@@ -164,11 +164,11 @@ const POS_LABEL = {
   c: 'conj.',
 } as const
 
-/** The word under a screen point, from the caret position — no selection made. */
-function wordAtPoint(
+/** Expand the caret position at a screen point into the word around it. */
+function wordFromCaret(
   x: number,
   y: number,
-): { word: string; rect: DOMRect; sentence?: string } | null {
+): { word: string; rect: DOMRect; node: Node; a: number; b: number } | null {
   type CaretDoc = Document & {
     caretRangeFromPoint?: (x: number, y: number) => Range | null
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
@@ -202,7 +202,48 @@ function wordAtPoint(
   const range = document.createRange()
   range.setStart(node, a)
   range.setEnd(node, b)
+  return { word, rect: range.getBoundingClientRect(), node, a, b }
+}
+
+/**
+ * The word a tap MEANT, not just the word under its exact point. Body text at
+ * fit-width is ~12px tall, so the exact caret regularly lands in the interline
+ * gap (no word at all) or clips a neighbour. Probe a small neighbourhood,
+ * collect the distinct words, and take the one whose box is nearest the point.
+ * (Finger-contact bias — the touch point sitting below what the eye aimed at —
+ * is corrected by the CALLER shifting y before this runs; mouse taps aren't.)
+ */
+function wordAtPoint(
+  x: number,
+  y: number,
+): { word: string; rect: DOMRect; sentence?: string } | null {
+  type Candidate = NonNullable<ReturnType<typeof wordFromCaret>>
+  const seen = new Map<string, Candidate>()
+  // Probes reach further UP than down: the fingertip's contact point sits
+  // below the word the eye aimed at, never meaningfully above it.
+  for (const dy of [0, -5, 5, -10]) {
+    for (const dx of [0, -7, 7]) {
+      const c = wordFromCaret(x + dx, y + dy)
+      if (!c) continue
+      const key = `${c.a}:${c.word}:${c.rect.top.toFixed(0)}:${c.rect.left.toFixed(0)}`
+      if (!seen.has(key)) seen.set(key, c)
+    }
+  }
+  let best: Candidate | null = null
+  let bestScore = Infinity
+  for (const c of seen.values()) {
+    const ddx = Math.max(c.rect.left - x, 0, x - c.rect.right)
+    const ddy = Math.max(c.rect.top - y, 0, y - c.rect.bottom)
+    const score = Math.hypot(ddx, ddy)
+    if (score < bestScore) {
+      bestScore = score
+      best = c
+    }
+  }
+  if (!best) return null
   // The sentence around the word — the vocabulary notebook's context line.
+  const { node, a, b, word, rect } = best
+  const text = node.textContent ?? ''
   let sa = a
   let sb = b
   while (sa > 0 && !/[.!?]/.test(text[sa - 1]) && a - sa < 160) sa--
@@ -214,7 +255,7 @@ function wordAtPoint(
     .slice(sa, Math.min(sb + 1, text.length))
     .replace(/\s+/g, ' ')
     .trim()
-  return { word, rect: range.getBoundingClientRect(), sentence: sentence || undefined }
+  return { word, rect, sentence: sentence || undefined }
 }
 
 /** A recolored page rendered to a 2D canvas, with its on-screen display size. */
@@ -1670,9 +1711,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   }, [])
 
   useEffect(() => {
+    // Accept taps anywhere over the text containers, not just dead-on a span —
+    // a fingertip regularly lands in the interline gap next to the word it
+    // meant; wordAtPoint's neighbourhood probing decides if a word is near.
     const isReaderText = (t: EventTarget | null) =>
-      t instanceof Element &&
-      !!t.closest('[data-text-layer] span[data-s], [data-textreader] p, [data-textreader] h2')
+      t instanceof Element && !!t.closest('[data-text-layer], [data-textreader]')
     // Mouse: the browser's own double-click. It also selects the word natively;
     // clear that so the selection popover doesn't pile on top of the card.
     const onDblClick = (e: MouseEvent) => {
@@ -1689,11 +1732,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       const touch = e.changedTouches[0]
       if (!touch || e.touches.length > 0) return
       const now = Date.now()
+      const prev = last
       const isDouble =
-        now - last.t < 350 && Math.hypot(touch.clientX - last.x, touch.clientY - last.y) < 32
+        now - prev.t < 350 && Math.hypot(touch.clientX - prev.x, touch.clientY - prev.y) < 32
       last = { t: now, x: touch.clientX, y: touch.clientY }
       if (!isDouble || !isReaderText(e.target)) return
-      if (defineAt(touch.clientX, touch.clientY)) {
+      // Both taps aimed at the same word, so their midpoint halves the finger
+      // noise; the fingertip's contact centroid sits ~6px below what the eye
+      // aimed at, so shift the point up before matching (mouse taps don't).
+      if (defineAt((touch.clientX + prev.x) / 2, (touch.clientY + prev.y) / 2 - 6)) {
         e.preventDefault()
         last.t = 0
       }
@@ -2485,20 +2532,50 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       {defCard && (
         <div
           data-defcard
-          className={`anim-fade fixed z-40 -translate-x-1/2 ${defCard.below ? '' : '-translate-y-full'}`}
+          className="anim-fade fixed z-40 -translate-x-1/2"
           style={{
             left: Math.min(Math.max(defCard.x, 160), window.innerWidth - 160),
-            top: defCard.below ? defCard.y + 10 : Math.max(48, defCard.y - 10),
+            // Anchor the edge nearest the word and grow AWAY from it, so a tall
+            // card can never run off the far side of the screen; maxHeight caps
+            // it to the space actually available and the senses list scrolls.
+            ...(defCard.below
+              ? { top: defCard.y + 10 }
+              : { bottom: window.innerHeight - defCard.y + 10 }),
           }}
         >
-          <div className="w-[300px] max-w-[86vw] rounded-2xl border border-line bg-panel/95 p-4 text-left shadow-2xl backdrop-blur-xl">
+          <div
+            className="flex w-[300px] max-w-[86vw] flex-col rounded-2xl border border-line bg-panel/95 p-4 text-left shadow-2xl backdrop-blur-xl"
+            style={{
+              maxHeight: defCard.below
+                ? window.innerHeight - defCard.y - 28
+                : defCard.y - 58,
+            }}
+          >
             {defCard.res === 'loading' ? (
               <p className="text-[13px] text-ink-mid">Looking up “{defCard.word}”…</p>
             ) : defCard.res === 'none' ? (
-              <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
+              <>
+                <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
+                {/* The offline dictionary is WordNet — dialect words and proper
+                    nouns (half of DCC's vocabulary) aren't in it. Nothing is
+                    fetched unless this is tapped, so local-first holds. */}
+                <button
+                  className="mt-2.5 w-full rounded-xl border border-accent/50 px-3 py-1.5 text-[12.5px] font-semibold text-accent hover:border-accent"
+                  onClick={() => {
+                    window.open(
+                      `https://duckduckgo.com/?q=${encodeURIComponent(`define ${defCard.word}`)}`,
+                      '_blank',
+                      'noopener',
+                    )
+                    setDefCard(null)
+                  }}
+                >
+                  Search the web
+                </button>
+              </>
             ) : (
               <>
-                <div className="flex items-baseline gap-2 border-b border-line/60 pb-2">
+                <div className="flex flex-none items-baseline gap-2 border-b border-line/60 pb-2">
                   <p className="min-w-0 flex-1 truncate font-serif text-[17px] text-ink-bright">
                     {defCard.res.word}
                     {defCard.word.toLowerCase() !== defCard.res.word && (
@@ -2533,7 +2610,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     {defCard.saved ? '✓ Saved' : '＋ Save'}
                   </button>
                 </div>
-                <ol className="mt-2.5 max-h-[44vh] space-y-3 overflow-y-auto">
+                <ol className="mt-2.5 min-h-0 flex-1 space-y-3 overflow-y-auto">
                   {defCard.res.senses.slice(0, 8).map((s, i) => (
                     <li key={i} className="text-[13px] leading-snug text-ink-body">
                       <span className="mr-1.5 rounded bg-inset px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
