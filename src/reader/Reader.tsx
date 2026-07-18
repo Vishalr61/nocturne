@@ -1052,11 +1052,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       if (!active || e.touches.length >= 2) return
       active = false
       canvas.style.willChange = ''
-      const next = startZoom * f
+      let next = startZoom * f
+      // Snap a release near fit-page onto it exactly — a slightly-off zoom
+      // means panning every page for no size gain. Haptic tick on the snap
+      // (Android; iOS Safari has no vibration API).
+      if (Math.abs(next - 1) < 0.12) {
+        if (Math.abs(next - 1) > 0.001 && Math.abs(1 - zoom) >= 0.02) {
+          try {
+            navigator.vibrate?.(10)
+          } catch {
+            /* no haptics on this platform */
+          }
+        }
+        next = 1
+      }
       const commit = {
         px: m0.x - rect0.left,
         py: m0.y - rect0.top,
-        scale: f,
+        scale: next / startZoom,
         mx: mNow.x,
         my: mNow.y,
       }

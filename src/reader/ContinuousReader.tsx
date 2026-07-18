@@ -261,7 +261,18 @@ export function ContinuousReader({
   // fingers pinned to them (same solved-per-move math as paged mode — no React,
   // no re-render, that's what makes it feel live). Release commits the zoom;
   // the transform stays up until the new layout lands so nothing snaps back.
+  //
+  // The commit SNAPS to the useful zoom stops. A slightly-off zoom is the worst
+  // state scroll mode has: every line needs a sideways scroll, for no visible
+  // size gain. Releasing near a detent lands exactly on it — fit-page (1), and
+  // fill-width where that differs (landscape / wide windows) — with a haptic
+  // tick (Android; iOS Safari has no vibration API) so the snap is felt.
   const stripRef = useRef<HTMLDivElement | null>(null)
+  const detentsRef = useRef<number[]>([1])
+  {
+    const widthFill = fitPage > 0 ? availW / fitPage : 1
+    detentsRef.current = widthFill > 1.02 ? [1, widthFill] : [1]
+  }
   const pinchCommitRef = useRef<{
     /** Content coords of the start midpoint (current layout px, strip-relative). */
     cx: number
@@ -324,7 +335,20 @@ export function ContinuousReader({
       const strip = stripRef.current
       if (!strip) return
       strip.style.willChange = ''
-      const next = startZoom * f
+      let next = startZoom * f
+      for (const d of detentsRef.current) {
+        if (Math.abs(next - d) / d < 0.12) {
+          if (Math.abs(next - d) > 0.001 && Math.abs(d - zoom) >= 0.02) {
+            try {
+              navigator.vibrate?.(10)
+            } catch {
+              /* no haptics on this platform */
+            }
+          }
+          next = d
+          break
+        }
+      }
       const cx = m0.x - rect0.left
       const cy = m0.y - rect0.top
       if (Math.abs(next - zoom) < 0.02) {
