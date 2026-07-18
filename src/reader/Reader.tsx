@@ -18,6 +18,7 @@ import {
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { detectContentBox } from '../engine/crop'
 import {
+  fold,
   getPageText,
   matchRectsOnPage,
   rangeRects,
@@ -131,6 +132,24 @@ function ExportChip({
       {prog !== null ? `${Math.round(prog * 100)}%` : label}
     </button>
   )
+}
+
+/** The last few searches, newest first — cheap wayfinding. */
+function recentSearches(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem('nocturne-recent-searches') ?? '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 6) : []
+  } catch {
+    return []
+  }
+}
+function rememberSearch(q: string): void {
+  try {
+    const list = [q, ...recentSearches().filter((x) => x !== q)].slice(0, 6)
+    localStorage.setItem('nocturne-recent-searches', JSON.stringify(list))
+  } catch {
+    /* private mode */
+  }
 }
 
 const POS_LABEL = {
@@ -379,6 +398,9 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [scanned, setScanned] = useState(0)
   /** The query whose matches are highlighted on the page (survives closing the panel). */
   const [highlightQuery, setHighlightQuery] = useState('')
+  const [recents, setRecents] = useState<string[]>(() => recentSearches())
+  /** Search-hit landing inside an EPUB chapter (nonce forces re-scroll). */
+  const [epubTarget, setEpubTarget] = useState<{ chapter: number; frac: number; nonce: number } | null>(null)
   const [highlights, setHighlights] = useState<HighlightRect[]>([])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   /** The live drag-to-turn filmstrip: three page bitmaps that follow the finger. */
@@ -1112,7 +1134,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const flush = () => {
       const s = statRef.current
       if (s.ms > 0 || s.pages > 0) {
-        void logReading(s.ms, s.pages)
+        void logReading(s.ms, s.pages, loadedIdRef.current ?? undefined)
         s.ms = 0
         s.pages = 0
       }
@@ -1411,6 +1433,45 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const aborted = { value: false }
     const timer = setTimeout(() => {
       void (async () => {
+        // EPUB: scan chapter text directly — no pdf.js, folded matching, a
+        // yield every few chapters so typing stays live.
+        const epub = epubRef.current
+        if (epub) {
+          setSearching(true)
+          setHits([])
+          setScanned(0)
+          const needle = fold(q).text
+          const found: SearchHit[] = []
+          try {
+            for (let c = 0; c < epub.chapterCount && !aborted.value; c++) {
+              const text = epub.chapterText(c)
+              const hay = fold(text)
+              let at = hay.text.indexOf(needle)
+              while (at !== -1 && found.length < 200) {
+                const s = hay.map[at]
+                const e = hay.map[at + needle.length - 1] + 1
+                found.push({
+                  page: c + 1,
+                  before: text.slice(Math.max(0, s - 40), s).trimStart(),
+                  match: text.slice(s, e),
+                  after: text.slice(e, e + 60).trimEnd(),
+                  frac: text.length ? s / text.length : 0,
+                } as SearchHit)
+                at = hay.text.indexOf(needle, at + needle.length)
+              }
+              setScanned(c + 1)
+              if (found.length <= 20 || c % 3 === 2) setHits([...found])
+              if (found.length >= 200) break
+              if (c % 3 === 2) await new Promise((r) => setTimeout(r, 0))
+            }
+          } finally {
+            if (!aborted.value) {
+              setHits([...found])
+              setSearching(false)
+            }
+          }
+          return
+        }
         const doc = docRef.current
         if (!doc) return
         setSearching(true)
@@ -1672,11 +1733,22 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     setBookmarks(await listBookmarks(id))
   }, [noteFor, noteDraft])
 
-  const openHit = useCallback((hit: SearchHit, q: string) => {
-    setHighlightQuery(q)
-    jumpTo(hit.page)
-    setShowSearch(false)
-  }, [jumpTo])
+  const openHit = useCallback(
+    (hit: SearchHit, q: string) => {
+      rememberSearch(q)
+      setRecents(recentSearches())
+      if (epubRef.current) {
+        const frac = (hit as SearchHit & { frac?: number }).frac ?? 0
+        jumpTo(hit.page)
+        setEpubTarget((t) => ({ chapter: hit.page - 1, frac, nonce: (t?.nonce ?? 0) + 1 }))
+      } else {
+        setHighlightQuery(q)
+        jumpTo(hit.page)
+      }
+      setShowSearch(false)
+    },
+    [jumpTo],
+  )
 
   const closeSearch = useCallback(() => {
     setShowSearch(false)
@@ -2066,7 +2138,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 >
                   ◐
                 </button>
-{!epubDoc && (
                 <button
                   aria-label="Search in book"
                   className="w-12 rounded-xl py-2 opacity-80 hover:opacity-100"
@@ -2078,7 +2149,6 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                 >
                   ⌕
                 </button>
-                )}
               </div>
 
               {!epubDoc && (
@@ -2220,6 +2290,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
           chapter={page - 1}
           onChapter={(c) => setPage(c + 1)}
           onJump={(c) => jumpTo(c + 1)}
+          scrollTarget={epubTarget}
           initialFrac={scrollOff}
           onFrac={setScrollOff}
           fg={rgbCss(theme.fg)}
@@ -2694,6 +2765,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               </div>
             )}
 
+            {epubDoc && (
+              <>
+                <div className="mb-2 mt-3 text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">
+                  Book
+                </div>
+                <button
+                  className="tint-card w-full rounded-xl px-3.5 py-2.5 text-left text-[12.5px] opacity-90 hover:opacity-100"
+                  onClick={() => {
+                    const id = loadedIdRef.current
+                    if (!id) return
+                    void getBook(id).then((b) => {
+                      if (!b) return
+                      void deliver(
+                        new Blob([b.data], { type: 'application/epub+zip' }),
+                        `${(title || 'book').replace(/[^\w ()-]+/g, ' ').trim()}.epub`,
+                      )
+                    })
+                  }}
+                >
+                  Share original file <span className="opacity-55">(.epub)</span>
+                </button>
+              </>
+            )}
             {!epubDoc && (<>
             <div className="mb-2 mt-3 flex items-baseline justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">
@@ -2800,6 +2894,24 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
               ✕
             </button>
           </div>
+          {!query.trim() && recents.length > 0 && (
+            <div className="mx-auto w-full max-w-xl px-5">
+              <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-ink-kicker">
+                Recent
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {recents.map((r) => (
+                  <button
+                    key={r}
+                    className="rounded-full border border-line bg-inset px-3 py-1.5 text-[12.5px] text-ink-mid hover:border-accent/50"
+                    onClick={() => setQuery(r)}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="mx-auto w-full max-w-xl px-5 pb-2 text-xs text-ink-faint">
             {query.trim().length < 2

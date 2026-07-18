@@ -35,6 +35,8 @@ export interface EpubDoc {
   percentAt(chapter: number, frac: number): number
   /** Plain text of a fragment target (a footnote body) in a chapter. */
   noteText(chapter: number, fragId: string): string | null
+  /** Plain text of a whole chapter (cached) — the search haystack. */
+  chapterText(index: number): string
   dispose(): void
 }
 
@@ -165,6 +167,7 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
 
   // --- chapter sanitization (lazy, cached) ---------------------------------
   const htmlCache = new Map<number, string>()
+  const textCache = new Map<number, string>()
   const blobUrls: string[] = []
 
   const imageUrl = (chapterPath: string, src: string): string | null => {
@@ -289,6 +292,15 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
       const f = Math.max(0, Math.min(1, frac))
       return Math.max(0, Math.min(1, (before + charCounts[c] * f) / totalChars))
     },
+    chapterText(index: number): string {
+      const cached = textCache.get(index)
+      if (cached !== undefined) return cached
+      const host = document.createElement('div')
+      host.innerHTML = chapterHtml(index)
+      const text = (host.textContent ?? '').replace(/\s+/g, ' ').trim()
+      textCache.set(index, text)
+      return text
+    },
     noteText(chapter: number, fragId: string): string | null {
       if (chapter < 0 || chapter >= spine.length || !/^[\w.:-]+$/.test(fragId)) return null
       const host = document.createElement('div')
@@ -303,6 +315,7 @@ export async function openEpub(bytes: Uint8Array): Promise<EpubDoc> {
       for (const u of blobUrls) URL.revokeObjectURL(u)
       blobUrls.length = 0
       htmlCache.clear()
+      textCache.clear()
     },
   }
 }
