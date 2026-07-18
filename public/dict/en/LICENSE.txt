@@ -28,4 +28,4 @@ and/or database.  Title to copyright in this software, database and
 any associated documentation shall at all times remain with
 Princeton University and LICENSEE agrees to preserve same.
 
-Derived from Princeton WordNet 3.1 (https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz), downloaded 2026-07-15.
+Derived from Princeton WordNet 3.1 (https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz), downloaded 2026-07-18.

@@ -3,7 +3,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 CHROME = str(next(Path.home().glob("Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell")))
-BOOK = str(Path.home() / "Documents/Hobby/Books/Dungeon Crawler Carl.pdf")
+BOOK = str(Path.home() / "Documents/Hobby/Books/DCC/DungeonCrawlerCarl.pdf")
 
 SCROLLER = "div.relative.flex-1.overflow-auto"
 

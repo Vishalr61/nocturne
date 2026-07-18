@@ -77,6 +77,17 @@ export default defineConfig({
               expiration: { maxEntries: 40 },
             },
           },
+          {
+            // Fonts aren't precached (all subsets of every face would be
+            // megabytes); cache-first on use, so any face you've read with
+            // keeps working offline. Hashed filenames make staleness moot.
+            urlPattern: ({ request }) => request.destination === 'font',
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'nocturne-fonts',
+              expiration: { maxEntries: 80 },
+            },
+          },
         ],
       },
     }),

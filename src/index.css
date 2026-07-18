@@ -139,18 +139,50 @@ body {
   font-weight: 600;
 }
 
-/* Warm scrollbars (desktop). */
+/* Text Mode chapter opening line — the classic print pairing with a drop cap:
+   the first line runs in spaced small caps, easing the eye into the chapter. */
+.nocturne-chapteropen::first-line {
+  font-variant-caps: small-caps;
+  letter-spacing: 0.045em;
+}
+
+/* Warm scrollbars: slim, translucent, theme-agnostic — the old solid-brown
+   10px bar was fine on the dark shelf but glaring on Android (which renders
+   styled scrollbars everywhere, unlike iOS) and on light reading themes.
+   Desktop keeps a grabbable width; touch gets a hairline position hint. */
+* {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(150, 128, 96, 0.35) transparent;
+}
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c2213;
+  background: rgba(150, 128, 96, 0.32);
   border-radius: 8px;
-  border: 3px solid #15110b;
+  /* inset the thumb without hardcoding a track colour under it */
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 128, 96, 0.55);
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+@media (pointer: coarse) {
+  ::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+  ::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:hover {
+    border: none;
+    background: rgba(150, 128, 96, 0.38);
+  }
 }
 
 /* EPUB chapters: the publisher's structure in Nocturne's dress. Sanitized

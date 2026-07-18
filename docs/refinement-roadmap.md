@@ -79,9 +79,10 @@ job is harder (reconstruction from layout), so the play is different:
   `reflow-baseline.json` is the committed baseline and the run fails on
   regression. Novels: median ≈0.99, zero low pages. No book text touches
   the repo — scores only.
-- **Spot-check affordance** (open): tap-and-hold a paragraph → peek at the
-  source page region it came from. Trust is built by letting you verify
-  cheaply.
+- ✅ **Spot-check affordance** (2026-07-17): long-press a paragraph → a peek
+  overlay shows the recolored source page region it was reconstructed from
+  (reflow now carries a per-block `srcRect`). Trust is built by letting you
+  verify cheaply. Verified by `scripts/verify/verify_p0_polish.py`.
 - **Structure coverage** (open): block quotes / letters (indented blocks),
   simple lists.
 
@@ -95,8 +96,11 @@ It won a full day of reading; it deserves the finish work:
   snapping to the page top.
 - ✅ Chapter-aware footer: tap the percent readout to cycle to "N left in
   ch." (next outline destination), choice remembered.
-- Snappier zoom: scroll mode re-renders on zoom commit; pinch should feel as
-  live as paged mode's.
+- ✅ Snappier zoom (2026-07-17): pinch in scroll mode now drives a live CSS
+  translate+scale preview of the strip (paged mode's solved-per-move focal
+  math) and commits on release, re-anchored so the point under the fingers
+  stays put — measured 0px drift. The commit repaint is unchanged (debounced,
+  serialized) so the iOS memory guardrails hold.
 
 ## 3b. EPUB input — worth it, but after Text Mode trust
 

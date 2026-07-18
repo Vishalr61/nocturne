@@ -4,6 +4,7 @@ import { Recolorizer } from '../engine/recolor'
 import { renderDarkPage } from '../engine/pipeline'
 import { classifyPage, type PageClassification } from '../engine/classify'
 import { getPageText, rangeRects, type TextCache } from '../engine/search'
+import { buzz } from '../engine/haptics'
 import type { Theme } from '../engine/theme'
 import { tintOf, type Highlight } from '../storage/db'
 import { TextLayer, type TextSelection } from './TextLayer'
@@ -256,46 +257,142 @@ export function ContinuousReader({
     return () => scroller.removeEventListener('scroll', onUserScroll)
   }, [onUserScroll])
 
-  // Pinch to zoom the whole strip (the natural gesture), committing on release —
-  // the page width re-renders and the strip re-anchors to your place.
+  // Pinch to zoom the whole strip, with a LIVE preview: while the fingers move,
+  // a pure CSS translate+scale on the strip keeps the point that was under the
+  // fingers pinned to them (same solved-per-move math as paged mode — no React,
+  // no re-render, that's what makes it feel live). Release commits the zoom;
+  // the transform stays up until the new layout lands so nothing snaps back.
+  //
+  // The commit SNAPS to the useful zoom stops. A slightly-off zoom is the worst
+  // state scroll mode has: every line needs a sideways scroll, for no visible
+  // size gain. Releasing near a detent lands exactly on it — fit-page (1), and
+  // fill-width where that differs (landscape / wide windows) — with a haptic
+  // tick (Android; iOS Safari has no vibration API) so the snap is felt.
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const detentsRef = useRef<number[]>([1])
+  {
+    const widthFill = fitPage > 0 ? availW / fitPage : 1
+    detentsRef.current = widthFill > 1.02 ? [1, widthFill] : [1]
+  }
+  const pinchCommitRef = useRef<{
+    /** Content coords of the start midpoint (current layout px, strip-relative). */
+    cx: number
+    cy: number
+    /** How much the committed zoom scales the current layout. */
+    ratio: number
+    /** Final midpoint in viewport coords — where cx/cy must land. */
+    mx: number
+    my: number
+  } | null>(null)
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
-    let d0 = 0
-    let ratio = 1
     let active = false
+    let startZoom = zoom
+    let rect0 = { left: 0, top: 0 } // strip position at gesture start
+    let d0 = 1
+    let f = 1 // clamped scale factor this gesture
+    let m0 = { x: 0, y: 0 }
+    let mNow = { x: 0, y: 0 }
+    const mid = (t: TouchList) => ({
+      x: (t[0].clientX + t[1].clientX) / 2,
+      y: (t[0].clientY + t[1].clientY) / 2,
+    })
     const dist = (t: TouchList) =>
       Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 2) return
+      const strip = stripRef.current
+      if (!strip) return
       e.preventDefault()
+      strip.style.transform = '' // measure the untransformed strip
+      const r = strip.getBoundingClientRect()
+      rect0 = { left: r.left, top: r.top }
+      m0 = mNow = mid(e.touches)
       d0 = dist(e.touches)
-      ratio = 1
+      startZoom = zoom
+      f = 1
       active = true
+      strip.style.transformOrigin = '0 0'
+      strip.style.willChange = 'transform'
     }
     const onMove = (e: TouchEvent) => {
       if (!active || e.touches.length !== 2) return
+      const strip = stripRef.current
+      if (!strip) return
       e.preventDefault()
-      if (d0 > 0) ratio = dist(e.touches) / d0
+      mNow = mid(e.touches)
+      // Clamp the preview to what the commit will allow (zoom 1..4).
+      f = Math.min(4, Math.max(1, startZoom * (dist(e.touches) / d0))) / startZoom
+      // With origin 0 0, the transform maps strip point p to translate + f·p:
+      // solve for the translate that puts the start point at the live midpoint.
+      const tx = mNow.x - rect0.left - f * (m0.x - rect0.left)
+      const ty = mNow.y - rect0.top - f * (m0.y - rect0.top)
+      strip.style.transform = `translate(${tx}px, ${ty}px) scale(${f})`
     }
-    const onEnd = () => {
-      if (!active) return
+    const onEnd = (e: TouchEvent) => {
+      if (!active || e.touches.length >= 2) return
       active = false
-      if (Math.abs(ratio - 1) > 0.05) {
-        onZoom(Math.min(4, Math.max(1, zoom * ratio)))
+      const strip = stripRef.current
+      if (!strip) return
+      strip.style.willChange = ''
+      let next = startZoom * f
+      for (const d of detentsRef.current) {
+        if (Math.abs(next - d) / d < 0.12) {
+          if (Math.abs(next - d) > 0.001 && Math.abs(d - zoom) >= 0.02) buzz()
+          next = d
+          break
+        }
       }
+      const cx = m0.x - rect0.left
+      const cy = m0.y - rect0.top
+      if (Math.abs(next - zoom) < 0.02) {
+        // Zoom effectively unchanged (tiny pinch, or panning while clamped at
+        // 1x/4x): no re-layout — apply the pan straight to the scroll position.
+        strip.style.transform = ''
+        const r = strip.getBoundingClientRect()
+        scroller.scrollLeft += r.left + cx - mNow.x
+        scroller.scrollTop += r.top + cy - mNow.y
+        return
+      }
+      // Commit: the layout effect below clears the preview and re-anchors in
+      // the same frame the new layout lands, so the strip never snaps back.
+      pinchCommitRef.current = { cx, cy, ratio: next / zoom, mx: mNow.x, my: mNow.y }
+      onZoom(next)
     }
     scroller.addEventListener('touchstart', onStart, { passive: false })
     scroller.addEventListener('touchmove', onMove, { passive: false })
     scroller.addEventListener('touchend', onEnd)
     scroller.addEventListener('touchcancel', onEnd)
     return () => {
+      if (active && stripRef.current) {
+        stripRef.current.style.transform = ''
+        stripRef.current.style.willChange = ''
+      }
       scroller.removeEventListener('touchstart', onStart)
       scroller.removeEventListener('touchmove', onMove)
       scroller.removeEventListener('touchend', onEnd)
       scroller.removeEventListener('touchcancel', onEnd)
     }
   }, [zoom, onZoom])
+
+  // Land a pinch commit: runs after React lays the strip out at the new zoom
+  // but before paint. Clear the preview transform and scroll so the content
+  // point that was under the fingers stays under where they ended, then leave
+  // lastOffsetPages pointing there so the slot-change re-anchor agrees.
+  useLayoutEffect(() => {
+    const commit = pinchCommitRef.current
+    if (!commit) return
+    pinchCommitRef.current = null
+    const scroller = scrollerRef.current
+    const strip = stripRef.current
+    if (!scroller || !strip || !slotHeight) return
+    strip.style.transform = ''
+    const r = strip.getBoundingClientRect()
+    scroller.scrollLeft += r.left + commit.cx * commit.ratio - commit.mx
+    scroller.scrollTop += r.top + commit.cy * commit.ratio - commit.my
+    lastOffsetPages.current = scroller.scrollTop / slotHeight
+  }, [zoom, slotHeight])
 
   // The one place that scrolls the strip programmatically. Suppresses reporting
   // until the scroll settles, and sets the render window for the destination.
@@ -451,6 +548,8 @@ export function ContinuousReader({
           is the (possibly zoomed) page width, centred when it fits and
           horizontally scrollable when it's wider than the screen. */}
       <div
+        ref={stripRef}
+        data-strip
         style={{
           height: pageCount * slotHeight,
           width: contentWidth,

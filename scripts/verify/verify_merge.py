@@ -53,7 +53,7 @@ def report(dest):
 
 with sync_playwright() as p:
     dcc = OUT / "dcc-merge.epub"
-    export_epub(p, str(Path.home() / "Documents/Hobby/Books/Dungeon Crawler Carl.pdf"), dcc, rng=(1, 60))
+    export_epub(p, str(Path.home() / "Documents/Hobby/Books/DCC/DungeonCrawlerCarl.pdf"), dcc, rng=(1, 60))
     report(dcc)
     eg = OUT / "enders-merge.epub"
     export_epub(p, str(Path.home() / "Documents/Hobby/Books/enders_game_-_full_novel.pdf"), eg, rng=(1, 40))

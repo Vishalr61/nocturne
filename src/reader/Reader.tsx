@@ -28,7 +28,8 @@ import {
   type TextCache,
 } from '../engine/search'
 import { TextLayer, type TextSelection } from './TextLayer'
-import { lookupWord, type DictResult } from '../engine/dict'
+import { lookupWord, lookupOnline, type DictResult } from '../engine/dict'
+import { buzz } from '../engine/haptics'
 import { openEpub, looksLikeEpub, type EpubDoc } from '../engine/epub'
 import { loadPace, recordPace, timeLeft, paceReady } from '../engine/pace'
 import { EpubReader } from './EpubReader'
@@ -162,13 +163,14 @@ const POS_LABEL = {
   d: 'det.',
   p: 'prep.',
   c: 'conj.',
+  i: 'interj.',
 } as const
 
-/** The word under a screen point, from the caret position — no selection made. */
-function wordAtPoint(
+/** Expand the caret position at a screen point into the word around it. */
+function wordFromCaret(
   x: number,
   y: number,
-): { word: string; rect: DOMRect; sentence?: string } | null {
+): { word: string; rect: DOMRect; node: Node; a: number; b: number } | null {
   type CaretDoc = Document & {
     caretRangeFromPoint?: (x: number, y: number) => Range | null
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
@@ -202,7 +204,48 @@ function wordAtPoint(
   const range = document.createRange()
   range.setStart(node, a)
   range.setEnd(node, b)
+  return { word, rect: range.getBoundingClientRect(), node, a, b }
+}
+
+/**
+ * The word a tap MEANT, not just the word under its exact point. Body text at
+ * fit-width is ~12px tall, so the exact caret regularly lands in the interline
+ * gap (no word at all) or clips a neighbour. Probe a small neighbourhood,
+ * collect the distinct words, and take the one whose box is nearest the point.
+ * (Finger-contact bias — the touch point sitting below what the eye aimed at —
+ * is corrected by the CALLER shifting y before this runs; mouse taps aren't.)
+ */
+function wordAtPoint(
+  x: number,
+  y: number,
+): { word: string; rect: DOMRect; sentence?: string } | null {
+  type Candidate = NonNullable<ReturnType<typeof wordFromCaret>>
+  const seen = new Map<string, Candidate>()
+  // Probes reach further UP than down: the fingertip's contact point sits
+  // below the word the eye aimed at, never meaningfully above it.
+  for (const dy of [0, -5, 5, -10]) {
+    for (const dx of [0, -7, 7]) {
+      const c = wordFromCaret(x + dx, y + dy)
+      if (!c) continue
+      const key = `${c.a}:${c.word}:${c.rect.top.toFixed(0)}:${c.rect.left.toFixed(0)}`
+      if (!seen.has(key)) seen.set(key, c)
+    }
+  }
+  let best: Candidate | null = null
+  let bestScore = Infinity
+  for (const c of seen.values()) {
+    const ddx = Math.max(c.rect.left - x, 0, x - c.rect.right)
+    const ddy = Math.max(c.rect.top - y, 0, y - c.rect.bottom)
+    const score = Math.hypot(ddx, ddy)
+    if (score < bestScore) {
+      bestScore = score
+      best = c
+    }
+  }
+  if (!best) return null
   // The sentence around the word — the vocabulary notebook's context line.
+  const { node, a, b, word, rect } = best
+  const text = node.textContent ?? ''
   let sa = a
   let sb = b
   while (sa > 0 && !/[.!?]/.test(text[sa - 1]) && a - sa < 160) sa--
@@ -214,7 +257,7 @@ function wordAtPoint(
     .slice(sa, Math.min(sb + 1, text.length))
     .replace(/\s+/g, ' ')
     .trim()
-  return { word, rect: range.getBoundingClientRect(), sentence: sentence || undefined }
+  return { word, rect, sentence: sentence || undefined }
 }
 
 /** A recolored page rendered to a 2D canvas, with its on-screen display size. */
@@ -463,6 +506,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
   const [textPara, setTextPara] = useState<ParaStyle>(() =>
     comfortStr('nocturne-textpara', 'indent') === 'spaced' ? 'spaced' : 'indent',
   )
+  /** OPT-IN online dictionary fallback (Wiktionary) for words the offline
+   *  shards miss. Off by default: enabling it means each MISSED word is sent
+   *  to Wiktionary — the one crack in local-first, chosen by the user. */
+  const [dictOnline, setDictOnline] = useState(() => comfortBool('nocturne-dict-online', false))
+  const dictOnlineRef = useRef(dictOnline)
+  dictOnlineRef.current = dictOnline
+  /** Transient chapter-title toast when scrolling crosses into a new chapter. */
+  const [chapterToast, setChapterToast] = useState<string | null>(null)
+  const prevChapterRef = useRef<string | null | undefined>(undefined)
   const [spread, setSpread] = useState(true)
   const [landscape, setLandscape] = useState(
     typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
@@ -1011,11 +1063,18 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       if (!active || e.touches.length >= 2) return
       active = false
       canvas.style.willChange = ''
-      const next = startZoom * f
+      let next = startZoom * f
+      // Snap a release near fit-page onto it exactly — a slightly-off zoom
+      // means panning every page for no size gain. Haptic tick on the snap
+      // (Android; iOS Safari has no vibration API).
+      if (Math.abs(next - 1) < 0.12) {
+        if (Math.abs(next - 1) > 0.001 && Math.abs(1 - zoom) >= 0.02) buzz()
+        next = 1
+      }
       const commit = {
         px: m0.x - rect0.left,
         py: m0.y - rect0.top,
-        scale: f,
+        scale: next / startZoom,
         mx: mNow.x,
         my: mNow.y,
       }
@@ -1088,6 +1147,29 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     [pageCount, tick],
   )
 
+  // Scroll mode's page boundaries slide by without ceremony, so crossing into
+  // a new chapter gets a quiet toast (title + a haptic tick). The first sample
+  // after load/mode-switch only primes the ref — arriving isn't crossing. The
+  // dismiss timer lives in a ref: an effect-cleanup timer would be cancelled
+  // by the very next page tick and leave the toast stuck.
+  const toastTimerRef = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (viewMode !== 'scroll' || epubDoc || !toc.length) {
+      prevChapterRef.current = undefined
+      return
+    }
+    let cur: { title: string; page: number } | null = null
+    for (const t of toc) if (t.page <= page && (!cur || t.page >= cur.page)) cur = t
+    const key = cur?.title ?? null
+    const prev = prevChapterRef.current
+    prevChapterRef.current = key
+    if (prev === undefined || prev === key || !key) return
+    setChapterToast(key)
+    buzz(8)
+    window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => setChapterToast(null), 2200)
+  }, [page, viewMode, epubDoc, toc])
+
   // Persist comfort prefs.
   useEffect(() => {
     try {
@@ -1098,10 +1180,11 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       localStorage.setItem('nocturne-textwidth', String(textWidth))
       localStorage.setItem('nocturne-textjustify', textJustify ? '1' : '0')
       localStorage.setItem('nocturne-textpara', textPara)
+      localStorage.setItem('nocturne-dict-online', dictOnline ? '1' : '0')
     } catch {
       /* private mode; non-fatal */
     }
-  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara])
+  }, [dim, textSize, textLeading, textFontId, textWidth, textJustify, textPara, dictOnline])
 
   // Reading stats: time is the gap between page arrivals (capped, so a
   // put-down phone doesn't count the night), pages are forward movement
@@ -1511,7 +1594,10 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
     const id = loadedIdRef.current
     if (!id) return
     if (bookmarks.some((b) => b.page === page)) await removeBookmark(id, page)
-    else await addBookmark(id, page)
+    else {
+      await addBookmark(id, page)
+      buzz()
+    }
     setBookmarks(await listBookmarks(id))
   }, [bookmarks, page])
 
@@ -1663,16 +1749,21 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       saved: false,
       res: 'loading',
     })
-    void lookupWord(hit.word).then((res) => {
-      setDefCard((cur) => (cur && cur.word === hit.word ? { ...cur, res: res ?? 'none' } : cur))
+    void lookupWord(hit.word).then(async (res) => {
+      // Offline miss + the user opted into the online fallback: try Wiktionary
+      // (this is the only path that sends the word anywhere).
+      const final = res ?? (dictOnlineRef.current ? await lookupOnline(hit.word) : null)
+      setDefCard((cur) => (cur && cur.word === hit.word ? { ...cur, res: final ?? 'none' } : cur))
     })
     return true
   }, [])
 
   useEffect(() => {
+    // Accept taps anywhere over the text containers, not just dead-on a span —
+    // a fingertip regularly lands in the interline gap next to the word it
+    // meant; wordAtPoint's neighbourhood probing decides if a word is near.
     const isReaderText = (t: EventTarget | null) =>
-      t instanceof Element &&
-      !!t.closest('[data-text-layer] span[data-s], [data-textreader] p, [data-textreader] h2')
+      t instanceof Element && !!t.closest('[data-text-layer], [data-textreader]')
     // Mouse: the browser's own double-click. It also selects the word natively;
     // clear that so the selection popover doesn't pile on top of the card.
     const onDblClick = (e: MouseEvent) => {
@@ -1689,11 +1780,15 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
       const touch = e.changedTouches[0]
       if (!touch || e.touches.length > 0) return
       const now = Date.now()
+      const prev = last
       const isDouble =
-        now - last.t < 350 && Math.hypot(touch.clientX - last.x, touch.clientY - last.y) < 32
+        now - prev.t < 350 && Math.hypot(touch.clientX - prev.x, touch.clientY - prev.y) < 32
       last = { t: now, x: touch.clientX, y: touch.clientY }
       if (!isDouble || !isReaderText(e.target)) return
-      if (defineAt(touch.clientX, touch.clientY)) {
+      // Both taps aimed at the same word, so their midpoint halves the finger
+      // noise; the fingertip's contact centroid sits ~6px below what the eye
+      // aimed at, so shift the point up before matching (mouse taps don't).
+      if (defineAt((touch.clientX + prev.x) / 2, (touch.clientY + prev.y) / 2 - 6)) {
         e.preventDefault()
         last.t = 0
       }
@@ -2480,30 +2575,74 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
         </div>
       )}
 
+      {chapterToast && (
+        <div
+          className="anim-fade pointer-events-none fixed left-1/2 z-40 -translate-x-1/2 rounded-full border border-line bg-panel/90 px-4 py-1.5 font-serif text-[13px] backdrop-blur-md"
+          style={{ top: 'max(18px, env(safe-area-inset-top))', color: rgbCss(theme.fg) }}
+        >
+          {chapterToast}
+        </div>
+      )}
+
       {/* Definition card: pinned to the double-tapped word, dismissed by the
           next tap anywhere else. */}
       {defCard && (
         <div
           data-defcard
-          className={`anim-fade fixed z-40 -translate-x-1/2 ${defCard.below ? '' : '-translate-y-full'}`}
+          className="anim-fade fixed z-40 -translate-x-1/2"
           style={{
             left: Math.min(Math.max(defCard.x, 160), window.innerWidth - 160),
-            top: defCard.below ? defCard.y + 10 : Math.max(48, defCard.y - 10),
+            // Anchor the edge nearest the word and grow AWAY from it, so a tall
+            // card can never run off the far side of the screen; maxHeight caps
+            // it to the space actually available and the senses list scrolls.
+            ...(defCard.below
+              ? { top: defCard.y + 10 }
+              : { bottom: window.innerHeight - defCard.y + 10 }),
           }}
         >
-          <div className="w-[300px] max-w-[86vw] rounded-2xl border border-line bg-panel/95 p-4 text-left shadow-2xl backdrop-blur-xl">
+          <div
+            className="flex w-[300px] max-w-[86vw] flex-col rounded-2xl border border-line bg-panel/95 p-4 text-left shadow-2xl backdrop-blur-xl"
+            style={{
+              maxHeight: defCard.below
+                ? window.innerHeight - defCard.y - 28
+                : defCard.y - 58,
+            }}
+          >
             {defCard.res === 'loading' ? (
               <p className="text-[13px] text-ink-mid">Looking up “{defCard.word}”…</p>
             ) : defCard.res === 'none' ? (
-              <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
+              <>
+                <p className="text-[13px] text-ink-mid">No definition for “{defCard.word}”.</p>
+                {/* The offline dictionary is WordNet — dialect words and proper
+                    nouns (half of DCC's vocabulary) aren't in it. Nothing is
+                    fetched unless this is tapped, so local-first holds. */}
+                <button
+                  className="mt-2.5 w-full rounded-xl border border-accent/50 px-3 py-1.5 text-[12.5px] font-semibold text-accent hover:border-accent"
+                  onClick={() => {
+                    window.open(
+                      `https://duckduckgo.com/?q=${encodeURIComponent(`define ${defCard.word}`)}`,
+                      '_blank',
+                      'noopener',
+                    )
+                    setDefCard(null)
+                  }}
+                >
+                  Search the web
+                </button>
+              </>
             ) : (
               <>
-                <div className="flex items-baseline gap-2 border-b border-line/60 pb-2">
+                <div className="flex flex-none items-baseline gap-2 border-b border-line/60 pb-2">
                   <p className="min-w-0 flex-1 truncate font-serif text-[17px] text-ink-bright">
                     {defCard.res.word}
                     {defCard.word.toLowerCase() !== defCard.res.word && (
                       <span className="ml-2 text-[12px] font-normal text-ink-faint">
                         from “{defCard.word}”
+                      </span>
+                    )}
+                    {defCard.res.source === 'wiktionary' && (
+                      <span className="ml-2 text-[10px] font-sans font-normal uppercase tracking-wide text-ink-faint">
+                        Wiktionary
                       </span>
                     )}
                   </p>
@@ -2528,12 +2667,13 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                         context: defCard.context,
                       })
                       setDefCard((c) => (c ? { ...c, saved: true } : c))
+                      buzz()
                     }}
                   >
                     {defCard.saved ? '✓ Saved' : '＋ Save'}
                   </button>
                 </div>
-                <ol className="mt-2.5 max-h-[44vh] space-y-3 overflow-y-auto">
+                <ol className="mt-2.5 min-h-0 flex-1 space-y-3 overflow-y-auto">
                   {defCard.res.senses.slice(0, 8).map((s, i) => (
                     <li key={i} className="text-[13px] leading-snug text-ink-body">
                       <span className="mr-1.5 rounded bg-inset px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
@@ -2689,6 +2829,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                     on={textPara === 'indent'}
                     onTap={() => setTextPara(textPara === 'indent' ? 'spaced' : 'indent')}
                   />
+                  <Tile icon="@" label="Web defs" on={dictOnline} onTap={() => setDictOnline(!dictOnline)} />
                   <Tile icon="≣" label="Justify" on={textJustify} onTap={() => setTextJustify(!textJustify)} />
                   {'speechSynthesis' in window && !epubDoc && (
                     <Tile
@@ -2709,6 +2850,7 @@ export function Reader({ bookId, onShelf }: ReaderProps) {
                   {cropBox && (
                     <Tile icon="◱" label="Crop" on={cropMargins} onTap={() => setCropMargins(!cropMargins)} />
                   )}
+                  <Tile icon="@" label="Web defs" on={dictOnline} onTap={() => setDictOnline(!dictOnline)} />
                   {'speechSynthesis' in window && (
                     <Tile
                       icon={reading ? '◼' : '▶'}

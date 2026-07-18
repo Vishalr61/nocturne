@@ -13,6 +13,9 @@ import {
   deleteVocabWord,
   listVocab,
   allBookTimes,
+  readingDays,
+  bookHistory,
+  type BookHistoryRow,
   readingStats,
   renameBook,
   requestPersistentStorage,
@@ -35,6 +38,7 @@ import {
 } from '../storage/syncClient'
 import { importBook } from './import'
 import { loadPace, timeLeft, paceReady, fmtLeft } from '../engine/pace'
+import { buzz } from '../engine/haptics'
 
 /** Chromium's beforeinstallprompt event (not in the TS DOM lib). */
 interface InstallPromptEvent extends Event {
@@ -89,6 +93,15 @@ export function Shelf({ onOpen }: ShelfProps) {
   // Vocabulary notebook: words saved from the dictionary card while reading.
   const [vocab, setVocab] = useState<VocabWord[]>([])
   const [showVocab, setShowVocab] = useState(false)
+  // The reading sheet: day-by-day chart + the books-you've-read timeline.
+  const [showStats, setShowStats] = useState(false)
+  const [days, setDays] = useState<{ day: string; min: number }[]>([])
+  const [history, setHistory] = useState<BookHistoryRow[]>([])
+  const openStats = useCallback(() => {
+    setShowStats(true)
+    void readingDays(14).then(setDays)
+    void bookHistory().then(setHistory)
+  }, [])
   const [vocabQuery, setVocabQuery] = useState('')
   const [vocabOpen, setVocabOpen] = useState<string | null>(null) // expanded word id
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
@@ -315,7 +328,9 @@ export function Shelf({ onOpen }: ShelfProps) {
 
   const toggleFinished = useCallback(
     async (b: Book) => {
-      await setBookFinished(b.id, !progress[b.id]?.finished)
+      const finishing = !progress[b.id]?.finished
+      await setBookFinished(b.id, finishing)
+      if (finishing) buzz(12) // closing a book deserves a tick
       await refresh()
     },
     [progress, refresh],
@@ -404,25 +419,32 @@ export function Shelf({ onOpen }: ShelfProps) {
                   className="mx-auto flex w-full max-w-md flex-col items-center pt-2 text-center"
                   onClick={() => onOpen(hero.id)}
                 >
-                  <div
-                    className="aspect-[3/4] flex-none overflow-hidden rounded-2xl"
-                    style={{
-                      width: 'clamp(140px,17vw,190px)',
-                      boxShadow:
-                        '0 34px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,0.07)',
-                    }}
-                  >
-                    {hero.thumb ? (
-                      <img src={hero.thumb} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div
-                        className="flex h-full w-full flex-col justify-end p-4"
-                        style={{ background: coverGradient(hero.id) }}
-                      >
-                        <div className="font-serif text-lg font-medium leading-tight text-ink-shelf">
-                          {hero.title}
+                  <div className="relative flex-none">
+                    <div
+                      className="aspect-[3/4] overflow-hidden rounded-2xl"
+                      style={{
+                        width: 'clamp(140px,17vw,190px)',
+                        boxShadow:
+                          '0 34px 60px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,0.07)',
+                      }}
+                    >
+                      {hero.thumb ? (
+                        <img src={hero.thumb} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div
+                          className="flex h-full w-full flex-col justify-end p-4"
+                          style={{ background: coverGradient(hero.id) }}
+                        >
+                          <div className="font-serif text-lg font-medium leading-tight text-ink-shelf">
+                            {hero.title}
+                          </div>
                         </div>
-                      </div>
+                      )}
+                    </div>
+                    {(progress[hero.id]?.percent ?? 0) > 0 && (
+                      <ProgressRing
+                        pct={progress[hero.id]?.finished ? 1 : (progress[hero.id]?.percent ?? 0)}
+                      />
                     )}
                   </div>
                   <div
@@ -432,14 +454,6 @@ export function Shelf({ onOpen }: ShelfProps) {
                     {hero.title}
                   </div>
                   <div className="mt-1.5 text-[13px] text-ink-mid">{meta(hero)}</div>
-                  <div className="mt-2 flex w-full max-w-[280px] items-center">
-                    <div className="h-[3px] flex-1 overflow-hidden rounded bg-white/10">
-                      <div
-                        className="h-full bg-gradient-to-r from-accent to-accent-hi"
-                        style={{ width: `${Math.round((progress[hero.id]?.percent ?? 0) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
                   <span className="mt-5 inline-block rounded-full bg-accent px-8 py-2.5 text-sm font-semibold text-accent-on shadow-lg">
                     Resume reading
                   </span>
@@ -448,7 +462,11 @@ export function Shelf({ onOpen }: ShelfProps) {
             )}
 
             {stats && stats.weekMin > 0 && (
-              <div className="mx-auto mt-9 grid max-w-lg grid-cols-4 gap-2">
+              <button
+                aria-label="Reading history"
+                className="mx-auto mt-9 grid w-full max-w-lg grid-cols-4 gap-2 transition-opacity hover:opacity-90"
+                onClick={openStats}
+              >
                 {[
                   { n: String(stats.todayMin), u: 'min', k: 'today' },
                   {
@@ -479,7 +497,7 @@ export function Shelf({ onOpen }: ShelfProps) {
                     </div>
                   </div>
                 ))}
-              </div>
+              </button>
             )}
 
             {vocab.length > 0 && (
@@ -691,6 +709,75 @@ export function Shelf({ onOpen }: ShelfProps) {
 
       {/* Vocabulary notebook: every word saved from the dictionary card —
           searchable, annotatable, deletable (with undo). */}
+      {showStats && (
+        <div
+          className="anim-fade fixed inset-0 z-40 flex items-end justify-center bg-black/50 sm:items-center"
+          onClick={() => setShowStats(false)}
+        >
+          <div
+            className="anim-rise flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl border border-line bg-panel p-5 sm:max-h-[80vh] sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-serif text-lg text-ink-bright">Your reading</h3>
+              <button
+                aria-label="Close reading history"
+                className="h-8 w-8 rounded-lg border border-line bg-inset text-ink-soft hover:text-ink-body"
+                onClick={() => setShowStats(false)}
+              >
+                ✕
+              </button>
+            </div>
+            {days.length > 0 && (
+              <div className="mb-1 flex items-end gap-[3px]" style={{ height: 64 }}>
+                {days.map((d, i) => {
+                  const max = Math.max(...days.map((x) => x.min), 30)
+                  return (
+                    <div key={d.day} className="flex-1" title={`${d.day}: ${d.min} min`}>
+                      <div
+                        className={`w-full rounded-t ${
+                          i === days.length - 1 ? 'bg-accent' : 'bg-accent/45'
+                        }`}
+                        style={{ height: Math.max(2, (d.min / max) * 64) }}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <div className="mb-4 flex justify-between text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+              <span>2 weeks ago</span>
+              <span>{days.reduce((n, d) => n + d.min, 0)} min · today</span>
+            </div>
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+              {history.length === 0 && (
+                <p className="py-6 text-center text-[13px] text-ink-faint">
+                  Read a little and your books will gather here.
+                </p>
+              )}
+              {history.map((h) => (
+                <div
+                  key={h.bookId}
+                  className={`rounded-xl border border-line bg-inset px-3.5 py-2.5 ${
+                    h.ghost ? 'opacity-55' : ''
+                  }`}
+                >
+                  <div className="flex items-baseline gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink-body">
+                      {h.title}
+                    </span>
+                    {h.finished && <span className="flex-none text-[11px] text-accent">Finished</span>}
+                  </div>
+                  <div className="mt-0.5 text-[11.5px] text-ink-faint">
+                    {historyLine(h)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showVocab && (
         <div
           className="anim-fade fixed inset-0 z-40 flex items-end justify-center bg-black/50 sm:items-center"
@@ -970,6 +1057,69 @@ export function Shelf({ onOpen }: ShelfProps) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const fmtDay = (ts: number) =>
+  new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+/** One line of reading history: dates, pace, time — whatever the row has. */
+function historyLine(h: BookHistoryRow): string {
+  const parts: string[] = []
+  if (h.finished && h.startedAt && h.finishedAt) {
+    const days = Math.max(1, Math.round((h.finishedAt - h.startedAt) / 86_400_000))
+    parts.push(`${fmtDay(h.startedAt)} – ${fmtDay(h.finishedAt)}`)
+    parts.push(days === 1 ? 'in a day' : `in ${days} days`)
+  } else if (h.finished && h.finishedAt) {
+    parts.push(`Finished ${fmtDay(h.finishedAt)}`)
+  } else if (h.startedAt) {
+    parts.push(`Reading since ${fmtDay(h.startedAt)}`)
+  }
+  const read = fmtLeft(h.ms)
+  if (read) parts.push(`${read} read`)
+  if (h.ghost) parts.push('not on this device')
+  return parts.join(' · ')
+}
+
+/** A small progress ring on the hero cover's corner that draws itself in on
+ *  arrival — the shelf's one moment of motion. Percent sits in the middle. */
+function ProgressRing({ pct }: { pct: number }) {
+  const [drawn, setDrawn] = useState(0)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setDrawn(pct))
+    return () => cancelAnimationFrame(id)
+  }, [pct])
+  const r = 19
+  const c = 2 * Math.PI * r
+  return (
+    <div
+      className="absolute -bottom-3 -right-3 grid h-12 w-12 place-items-center rounded-full"
+      style={{
+        background: 'rgba(10,8,5,0.78)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        boxShadow: '0 6px 16px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08)',
+      }}
+    >
+      <svg width="48" height="48" className="-rotate-90">
+        <circle cx="24" cy="24" r={r} fill="none" stroke="rgba(255,255,255,0.13)" strokeWidth="3.5" />
+        <circle
+          cx="24"
+          cy="24"
+          r={r}
+          fill="none"
+          stroke="rgb(var(--accent-rgb))"
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - drawn)}
+          style={{ transition: 'stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1)' }}
+        />
+      </svg>
+      <span className="absolute text-[10px] font-semibold tabular-nums text-white/90">
+        {Math.round(pct * 100)}%
+      </span>
     </div>
   )
 }

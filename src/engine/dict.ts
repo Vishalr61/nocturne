@@ -6,12 +6,14 @@
 // 0.json for everything else); morph.json holds WordNet's irregular-form
 // exceptions ("went" → "go").
 //
-// Framework-free: no React, no DOM beyond fetch. Never throws to the
-// caller — any fetch/parse failure resolves to null.
+// Framework-free: no React; DOM only for fetch and an inert DOMParser (the
+// online fallback's HTML stripping). Never throws to the caller — any
+// fetch/parse failure resolves to null.
 
 /** n/v/a/r from WordNet; m modal · u pronoun · d determiner · p preposition ·
- *  c conjunction from the curated function-word set (build-dict.mjs). */
-export type DictPos = 'n' | 'v' | 'a' | 'r' | 'm' | 'u' | 'd' | 'p' | 'c';
+ *  c conjunction from the curated function-word set (build-dict.mjs);
+ *  i interjection (only ever from the online fallback). */
+export type DictPos = 'n' | 'v' | 'a' | 'r' | 'm' | 'u' | 'd' | 'p' | 'c' | 'i';
 
 export interface DictSense {
   pos: DictPos;
@@ -26,6 +28,8 @@ export interface DictResult {
   /** The lemma the senses belong to (may differ from the input, e.g. "went" → "go"). */
   word: string;
   senses: DictSense[];
+  /** Set when the senses came from the opt-in online fallback, not our shards. */
+  source?: 'wiktionary';
 }
 
 /** Shard format: lemma → [[pos, def, example?, synonyms?], ...], most common
@@ -155,7 +159,7 @@ function detachmentCandidates(w: string): string[] {
 // ---------------------------------------------------------------------------
 // lookup
 
-const POS_CODES = ['n', 'v', 'a', 'r', 'm', 'u', 'd', 'p', 'c'] as const;
+const POS_CODES = ['n', 'v', 'a', 'r', 'm', 'u', 'd', 'p', 'c', 'i'] as const;
 
 function isPos(p: string): p is DictPos {
   return (POS_CODES as readonly string[]).includes(p);
@@ -214,4 +218,80 @@ export async function lookupWord(raw: string): Promise<DictResult | null> {
     if (senses) return { word: candidate, senses };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// online fallback (OPT-IN) — Wiktionary's REST API, tried only after the
+// offline lookup misses. This is the one place the dictionary touches the
+// network, and it sends exactly one thing: the normalized tapped word. It
+// covers what WordNet deliberately omits — dialect ("mudge"), slang, and
+// recent coinages. Results are session-cached; any failure resolves to null.
+
+const WIKT_POS: Record<string, DictPos> = {
+  noun: 'n',
+  'proper noun': 'n',
+  verb: 'v',
+  adjective: 'a',
+  adverb: 'r',
+  pronoun: 'u',
+  preposition: 'p',
+  conjunction: 'c',
+  determiner: 'd',
+  article: 'd',
+  numeral: 'd',
+  interjection: 'i',
+};
+
+/** Wiktionary definitions arrive as HTML; parse inert (no loads, no scripts)
+ *  and keep the text. */
+function stripHtml(s: string): string {
+  const doc = new DOMParser().parseFromString(s, 'text/html');
+  return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+interface WiktDefinition {
+  definition?: string;
+  parsedExamples?: { example?: string }[];
+}
+interface WiktEntry {
+  partOfSpeech?: string;
+  definitions?: WiktDefinition[];
+}
+
+const onlineCache = new Map<string, DictResult | null>();
+
+export async function lookupOnline(raw: string): Promise<DictResult | null> {
+  const word = normalize(raw);
+  if (!word) return null;
+  const cached = onlineCache.get(word);
+  if (cached !== undefined) return cached;
+  let out: DictResult | null = null;
+  try {
+    const res = await fetch(
+      `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`,
+    );
+    if (res.ok) {
+      const data = (await res.json()) as Record<string, WiktEntry[]>;
+      const senses: DictSense[] = [];
+      for (const entry of data.en ?? []) {
+        const pos = WIKT_POS[(entry.partOfSpeech ?? '').toLowerCase()];
+        if (!pos) continue;
+        for (const d of entry.definitions ?? []) {
+          const def = stripHtml(d.definition ?? '');
+          if (!def) continue;
+          const sense: DictSense = { pos, def };
+          const ex = stripHtml(d.parsedExamples?.[0]?.example ?? '');
+          if (ex) sense.ex = ex;
+          senses.push(sense);
+          if (senses.length >= 8) break;
+        }
+        if (senses.length >= 8) break;
+      }
+      if (senses.length) out = { word, senses, source: 'wiktionary' };
+    }
+  } catch {
+    out = null;
+  }
+  onlineCache.set(word, out);
+  return out;
 }
